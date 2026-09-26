@@ -1,0 +1,19 @@
+If:
+  PathMatch: '.*\.(cppm|ccm|ixx|mxx)$'
+CompileFlags:
+  Remove:
+    - -std=*
+    - /std:*
+  Add:
+    - -std=c++2c
+
+---
+
+Diagnostics:
+  Suppress: '*'
+
+InlayHints:
+  Enabled: true
+
+Hover:
+  ShowAKA: true
