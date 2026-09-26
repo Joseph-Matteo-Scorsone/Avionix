@@ -347,7 +347,3 @@ benchmarks/      hot-path benchmarks
 examples/        programs that use only `import avionix;`
 libs/            vendored dependencies (none)
 ```
-
-## Editor support
-
-`.clangd` is not wired to the build. The BMIs Zig produces come from Zig's Clang 22, and a clangd from another LLVM version cannot load them. Editor support needs a clangd that matches Zig's Clang, or a `compile_commands.json` that lets clangd build its own BMIs.
