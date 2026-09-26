@@ -186,6 +186,30 @@ const avionix_tests::suite other{
            check_equal(out.size(), std::size_t{1});
            check(std::get<paste_event>(out[0]).text == "abcdef");
          }},
+        {"paste_at_size_limit_is_delivered",
+         [] {
+           input_decoder d{5};
+           std::vector<event> out;
+           d.feed("\x1b[200~abcde\x1b[201~", out);
+           check_equal(out.size(), std::size_t{1});
+           check(std::get<paste_event>(out[0]).text == "abcde");
+           check_equal(d.malformed_count(), std::uint64_t{0});
+         }},
+        {"oversized_paste_is_discarded_and_decoder_resynchronizes",
+         [] {
+           input_decoder d{5};
+           std::vector<event> out;
+           d.feed("\x1b[200~abcd", out);
+           d.feed("efghijk", out);
+           check(out.empty());
+           check(d.in_paste());
+           check_equal(d.malformed_count(), std::uint64_t{1});
+           d.feed("gh\x1b[201~x", out);
+           check_equal(out.size(), std::size_t{1});
+           check(std::get<key_event>(out[0]).is(U'x'));
+           check(!d.in_paste());
+           check_equal(d.malformed_count(), std::uint64_t{1});
+         }},
         {"focus_events",
          [] {
            const auto events = decode_all("\x1b[I\x1b[O");

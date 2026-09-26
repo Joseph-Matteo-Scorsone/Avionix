@@ -1,5 +1,6 @@
 module;
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -42,6 +43,24 @@ class event_queue {
   // Thread safe. Ignored after close().
   void push(event value) { enqueue(queue_entry{std::move(value)}); }
 
+  // Thread safe. Waits until fewer than `max_pending` entries are queued,
+  // the queue closes, or `stop` is requested. Used by bounded input
+  // producers so an unread terminal stream cannot grow the queue without
+  // limit. A zero limit behaves as one.
+  [[nodiscard]] bool push_bounded(event value, std::size_t max_pending,
+                                  const std::stop_token& stop) {
+    std::unique_lock lock{mutex_};
+    const std::size_t limit = std::max<std::size_t>(max_pending, 1);
+    if (!space_.wait(lock, stop, [&] { return entries_.size() < limit || closed_; }) ||
+        closed_) {
+      return false;
+    }
+    entries_.push_back(queue_entry{std::move(value)});
+    lock.unlock();
+    ready_.notify_one();
+    return true;
+  }
+
   // Thread safe. `callback` runs on the thread that calls drain().
   // Ignored after close().
   void post(ui_callback callback) { enqueue(queue_entry{std::move(callback)}); }
@@ -57,14 +76,19 @@ class event_queue {
     ready_.wait_until(lock, stop, deadline,
                       [&] { return !entries_.empty() || closed_; });
     entries_.swap(out);
+    lock.unlock();
+    space_.notify_all();
     return out.size();
   }
 
   // Non-blocking drain.
   std::size_t try_drain(std::vector<queue_entry>& out) {
     out.clear();
-    std::scoped_lock lock{mutex_};
-    entries_.swap(out);
+    {
+      std::scoped_lock lock{mutex_};
+      entries_.swap(out);
+    }
+    space_.notify_all();
     return out.size();
   }
 
@@ -75,6 +99,7 @@ class event_queue {
       closed_ = true;
     }
     ready_.notify_all();
+    space_.notify_all();
   }
 
   [[nodiscard]] bool closed() const {
@@ -94,6 +119,7 @@ class event_queue {
 
   mutable std::mutex mutex_;
   std::condition_variable_any ready_;
+  std::condition_variable_any space_;
   std::vector<queue_entry> entries_;
   bool closed_{};
 };

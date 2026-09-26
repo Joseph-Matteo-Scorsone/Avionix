@@ -404,7 +404,12 @@ constexpr std::optional<event> decode_csi(char final_byte,
 
 class input_decoder {
  public:
-  input_decoder() { pending_.reserve(256); }
+  static constexpr std::size_t default_max_paste_bytes = 8 * 1024 * 1024;
+
+  explicit input_decoder(std::size_t max_paste_bytes = default_max_paste_bytes)
+      : max_paste_bytes_{max_paste_bytes} {
+    pending_.reserve(256);
+  }
 
   // Decodes as much of `bytes` as possible, appending events to `out`.
   // Incomplete trailing sequences are kept for the next call.
@@ -428,6 +433,7 @@ class input_decoder {
       if (step->paste_begin) {
         in_paste_ = true;
         paste_.clear();
+        paste_discarded_ = false;
       } else if (step->value) {
         out.push_back(std::move(*step->value));
       }
@@ -469,25 +475,41 @@ class input_decoder {
  private:
   static constexpr std::string_view paste_end = "\x1b[201~";
 
+  void append_paste(std::string_view bytes) {
+    if (paste_discarded_) return;
+    if (bytes.size() > max_paste_bytes_ - paste_.size()) {
+      paste_.clear();
+      paste_discarded_ = true;
+      ++malformed_;
+      return;
+    }
+    paste_.append(bytes);
+  }
+
   std::size_t consume_paste(std::size_t offset, std::vector<event>& out) {
     const std::string_view rest = std::string_view{pending_}.substr(offset);
     const std::size_t end = rest.find(paste_end);
     if (end != std::string_view::npos) {
-      paste_.append(rest.substr(0, end));
-      out.push_back(event{paste_event{std::move(paste_)}});
+      append_paste(rest.substr(0, end));
+      if (!paste_discarded_) {
+        out.push_back(event{paste_event{std::move(paste_)}});
+      }
       paste_.clear();
       in_paste_ = false;
+      paste_discarded_ = false;
       return offset + end + paste_end.size();
     }
     // Keep a possible partial end marker in pending_.
     const std::size_t keep = std::min(rest.size(), paste_end.size() - 1);
-    paste_.append(rest.substr(0, rest.size() - keep));
+    append_paste(rest.substr(0, rest.size() - keep));
     return pending_.size() - keep;
   }
 
   std::string pending_{};
   std::string paste_{};
+  std::size_t max_paste_bytes_;
   bool in_paste_{};
+  bool paste_discarded_{};
   std::uint64_t malformed_{};
 };
 

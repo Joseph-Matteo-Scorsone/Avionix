@@ -68,6 +68,12 @@ target_compile_options(avionix PRIVATE
     $<$<AND:$<BOOL:${AVIONIX_WARNINGS_AS_ERRORS}>,$<CXX_COMPILER_ID:MSVC>>:/WX>
 )
 
+# Capability detection reads a fixed set of environment variables once at
+# startup. The Windows CRT deprecates getenv even for this read-only use.
+target_compile_definitions(avionix PRIVATE
+    $<$<PLATFORM_ID:Windows>:_CRT_SECURE_NO_WARNINGS>
+)
+
 # Clang records this ABI option in BMIs. Importers must use the same value.
 target_compile_options(avionix PUBLIC
     $<$<CXX_COMPILER_ID:Clang>:-fno-sized-deallocation>

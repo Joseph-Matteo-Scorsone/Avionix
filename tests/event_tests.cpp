@@ -1,5 +1,6 @@
 // Event queue and dispatch: ordering, cross-thread posting, coalescing.
 
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -80,6 +81,29 @@ const avionix_tests::suite queue{
                  ordered && std::get<user_event>(std::get<event>(out[i])).value == i;
            }
            check(ordered);
+         }},
+        {"bounded_producer_waits_for_queue_space",
+         [] {
+           event_queue q;
+           q.push(event{user_event{1, 0}});
+           std::atomic<bool> started{false};
+           std::atomic<bool> finished{false};
+           std::jthread producer{[&](std::stop_token stop) {
+             started.store(true);
+             const bool pushed = q.push_bounded(event{user_event{2, 0}}, 1, stop);
+             finished.store(pushed);
+           }};
+           while (!started.load()) std::this_thread::yield();
+           std::this_thread::sleep_for(5ms);
+           check(!finished.load());
+
+           std::vector<queue_entry> out;
+           check_equal(q.try_drain(out), std::size_t{1});
+           producer.join();
+           check(finished.load());
+           check_equal(q.try_drain(out), std::size_t{1});
+           check_equal(std::get<user_event>(std::get<event>(out[0])).tag,
+                       std::uint64_t{2});
          }},
         {"close_wakes_waiter",
          [] {

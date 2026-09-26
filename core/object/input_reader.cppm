@@ -3,6 +3,7 @@ module;
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <optional>
 #include <stop_token>
 #include <thread>
@@ -37,6 +38,12 @@ struct input_reader_options {
   // Poll interval for size changes on platforms or terminals that do not
   // signal them. Also bounds how stale a missed resize can get.
   std::chrono::milliseconds size_poll_interval{250};
+  // Maximum bracketed-paste payload. Larger pastes are discarded through
+  // their closing marker so decoding can resume without retaining the data.
+  std::size_t max_paste_bytes{input_decoder::default_max_paste_bytes};
+  // Maximum queued terminal events. The reader applies backpressure at this
+  // limit; application-posted callbacks and user events remain unbounded.
+  std::size_t max_pending_events{4096};
 };
 
 class input_reader {
@@ -46,6 +53,7 @@ class input_reader {
       : session_{session},
         queue_{queue},
         options_{options},
+        decoder_{options.max_paste_bytes},
         last_size_{initial_size},
         thread_{[this](std::stop_token stop) { run(std::move(stop)); }} {}
 
@@ -91,7 +99,9 @@ class input_reader {
         check_size(events);
       }
       for (event& e : events) {
-        queue_.push(std::move(e));
+        if (!queue_.push_bounded(std::move(e), options_.max_pending_events, stop)) {
+          return;
+        }
       }
     }
   }
@@ -107,7 +117,7 @@ class input_reader {
   terminal_session& session_;
   event_queue& queue_;
   input_reader_options options_;
-  input_decoder decoder_{};
+  input_decoder decoder_;
   avionix::size last_size_;
   std::atomic<bool> failed_{false};
   // Declared last: the thread starts in the constructor and must see every

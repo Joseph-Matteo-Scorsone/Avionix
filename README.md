@@ -25,7 +25,7 @@ Nothing else is installed or vendored. `libs/` exists for future vendored depend
 | Command | What it does |
 | --- | --- |
 | `zig build` | Builds `libavionix` and installs it with the module BMIs into `zig-out/` |
-| `zig build test` | Runs the unit tests (193 tests, no terminal needed) |
+| `zig build test` | Runs the unit tests (196 tests, no terminal needed) |
 | `zig build smoke` | Runs each example under a pseudo terminal, resizes it, sends its quit key, and checks for a clean exit |
 | `zig build bench -Doptimize=ReleaseFast` | Runs the hot-path benchmarks |
 | `zig build examples` | Builds `hello`, `counter`, and `dashboard` into `zig-out/bin` |
@@ -35,24 +35,48 @@ Useful options: `-Dtarget=x86_64-linux-gnu` or `-Dtarget=aarch64-macos` to cross
 
 ### CMake
 
-CMake 3.28 or newer can build the same C++ module sources with Clang, GCC, or MSVC versions that support C++26 modules:
+CMake 3.28 or newer can build the same C++ module sources with a compiler that supports C++26 modules. Ninja is the simplest single-configuration generator. Select the compiler before the first configure, because module dependency scans and BMIs are compiler-specific:
 
 ```sh
-cmake -S . -B build -G Ninja
+cmake -S . -B build -G Ninja -DCMAKE_CXX_COMPILER=clang++
 cmake --build build
 ctest --test-dir build --output-on-failure
+./build/hello
 ```
 
-Run an example from `build` after compiling it. With a single-configuration Ninja build, the executables are `build/hello`, `build/counter`, and `build/dashboard` (`.exe` on Windows).
+On Windows, replace `clang++` with the full path to `clang++.exe` when it is not on `PATH`, and run `build\hello.exe`. For Visual Studio or another multi-configuration generator, pass `--config Release` to both `cmake --build` and `ctest`.
 
-Examples and tests are enabled by default. Benchmarks are opt-in:
+Build options:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `BUILD_TESTING` | `ON` | Builds `avionix-tests` and the PTY smoke harness |
+| `AVIONIX_BUILD_EXAMPLES` | `ON` | Builds `hello`, `counter`, and `dashboard` |
+| `AVIONIX_BUILD_BENCHMARKS` | `OFF` | Builds `avionix-benchmarks` |
+| `AVIONIX_WARNINGS_AS_ERRORS` | `ON` | Promotes Avionix compiler warnings to errors |
+
+Configure a release benchmark build and install the library:
 
 ```sh
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DAVIONIX_BUILD_BENCHMARKS=ON
 cmake --build build-release --target avionix-benchmarks
+./build-release/avionix-benchmarks --quick
+cmake --install build-release --prefix stage
 ```
 
-Use `-DAVIONIX_BUILD_EXAMPLES=OFF`, `-DBUILD_TESTING=OFF`, or `-DAVIONIX_WARNINGS_AS_ERRORS=OFF` when needed. Zig remains the primary build and handles cross-compilation and installable Clang BMIs.
+The install contains the library, its C++ module source files, and `AvionixTargets.cmake`. C++ module BMIs are compiler- and flag-specific, so CMake builds them for each consuming build instead of installing precompiled BMIs. To consume a checkout directly:
+
+```cmake
+cmake_minimum_required(VERSION 3.28)
+project(my_app LANGUAGES CXX)
+
+add_subdirectory(path/to/Avionix)
+add_executable(my_app main.cpp)
+target_compile_features(my_app PRIVATE cxx_std_26)
+target_link_libraries(my_app PRIVATE Avionix::avionix)
+```
+
+Zig remains the primary build. It handles cross-compilation and installs Clang BMIs for consumers built with the same Zig compiler and flags.
 
 The installed tree:
 
@@ -106,6 +130,69 @@ zig c++ main.o zig-out/lib/libavionix.a -o app    # zig-out/lib/avionix.lib on W
 ```
 
 For other modes, use the flags from `cxxFlags` in `build.zig`: `-O2 -g -fsanitize=undefined -fsanitize-trap=undefined` for ReleaseSafe, `-O3` for ReleaseFast, and `-Os` for ReleaseSmall.
+
+## API snippets
+
+### Compose a layout and handle text input
+
+Containers own widgets passed to `add()`. The returned reference points to the stored widget and remains valid while the container lives.
+
+```cpp
+#include <format>
+#include <string>
+
+import avionix;
+
+int main() {
+    using namespace avionix;
+
+    application app;
+    column root{1};
+    root.add(constraint::fixed(1), text{"Command"});
+    auto& input = root.add(constraint::fixed(1), text_input{"type here"});
+    auto& result = root.add(constraint::fill(), text{"Waiting for input"});
+
+    input.on_submit([&](const std::string& value) {
+        result.set(std::format("You entered: {}", value));
+        input.set_value("");
+    });
+
+    return app.run(root) ? 0 : 1;
+}
+```
+
+### Update widgets from a worker
+
+Workers post callbacks instead of touching widgets directly. The callback runs on the UI thread.
+
+```cpp
+std::jthread worker{[&](std::stop_token stop) {
+    unsigned completed = 0;
+    while (!stop.stop_requested()) {
+        do_background_work();
+        app.post([&, completed = ++completed] {
+            status.set(std::format("completed: {}", completed));
+        });
+    }
+}};
+
+auto outcome = app.run(root);
+worker.request_stop();
+worker.join();
+```
+
+### Render a widget without a terminal
+
+Tests can inspect the virtual screen directly. No raw mode or interactive terminal is needed.
+
+```cpp
+avionix::text label{"ready"};
+avionix::render_buffer screen =
+    avionix::application::render_to_buffer(label, {12, 1});
+
+assert(screen.at({0, 0}).text() == "r");
+assert(screen.at({4, 0}).text() == "y");
+```
 
 ## Architecture
 
@@ -193,6 +280,8 @@ The terminal is restored before `run()` returns, on success and on error.
 
 Malformed input sequences are not errors for the application. The decoder counts and drops them, and decoding continues with the next byte.
 
+Terminal input has two resource bounds. A bracketed paste may contain up to 8 MiB by default; the decoder discards a larger paste through its closing marker, then resumes normal decoding. The input reader also applies backpressure at 4,096 queued terminal events. Applications can change these limits with `application_options::max_paste_bytes` and `application_options::max_pending_input_events`.
+
 ## Terminal lifecycle
 
 `terminal_session` saves the terminal modes, then enables raw input (termios on POSIX, console modes plus UTF-8 code pages on Windows). It enters the alternate screen, hides the cursor, and enables bracketed paste, SGR mouse reporting, and focus events. Destruction undoes each step in reverse order. A test checks that every mode the enter sequence sets is reset by the leave sequence.
@@ -213,20 +302,37 @@ Known limits:
 
 ## Benchmarks
 
-Measured with `zig build bench -Doptimize=ReleaseFast` on Windows 11, x86-64, with a 200x60 screen (12,000 cells):
+Measured with `zig build bench -Doptimize=ReleaseFast` on Windows 11 build 26200, an Intel Core i9-10980HK, and a 200x60 screen (12,000 cells):
 
-| Benchmark | Time per op | Terminal bytes | Allocations |
-| --- | --- | --- | --- |
-| Diff of two identical frames | 26 µs | | 0 |
-| Present an animated frame (3 cells move) | 88 µs | 38 | 0 |
-| Present an unchanged frame | 90 µs | 0 | 0 |
-| Present a full repaint | 244 µs | 5,012 | 0 |
-| Decode mixed input (keys, mouse, paste) | 72 MB/s | | 0 |
-| Display width, ASCII | 620 MB/s | | 0 |
-| Display width, mixed scripts and emoji | 86 MB/s | | 0 |
-| Event queue push, drain, and dispatch | 12.7 M events/s | | 0 |
+Rendering latency:
+
+| Work | Latency | Terminal output | Allocations |
+| --- | ---: | ---: | ---: |
+| Diff two identical 12,000-cell frames | 22.9 µs | 0 bytes | 0 |
+| Present an animated frame with 3 moving cells | 81.7 µs | 38 bytes | 0 |
+| Present an unchanged frame | 88.2 µs | 0 bytes | 0 |
+| Present a full repaint | 246.3 µs | 5,012 bytes | 0 |
+
+Parser and queue throughput:
+
+| Work | Throughput | Allocations per operation |
+| --- | ---: | ---: |
+| Decode mixed keys, mouse events, and paste | 86.3 MB/s | 0 |
+| Measure ASCII display width | 699.4 MB/s | 0 |
+| Measure mixed-script and emoji display width | 109.0 MB/s | 0 |
+| Push, drain, and dispatch event batches | 12.4 million events/s | 0 |
 
 The present timings include clearing the back buffer and drawing 60 rows of text into it. The benchmark binary replaces `operator new` to count allocations. Steady-state frames allocate nothing.
+
+Use `--quick` for a short run or pass a benchmark-name substring to select a group:
+
+```sh
+zig build bench -Doptimize=ReleaseFast -- --quick
+zig build bench -Doptimize=ReleaseFast -- present.
+zig build bench -Doptimize=ReleaseFast -- unicode.
+```
+
+Each output row reports `ns/op` and `allocs/op`. Relevant rows also report cells inspected, terminal bytes emitted, or throughput in MB/s or millions of events per second. Compare results from the same machine, compiler, optimization mode, and screen size.
 
 ## Project layout
 

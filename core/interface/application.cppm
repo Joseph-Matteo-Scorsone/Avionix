@@ -3,6 +3,7 @@ module;
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <functional>
@@ -58,6 +59,9 @@ struct application_options {
   // normal quit behavior.
   bool text_selection{true};
   std::chrono::milliseconds frame_interval{16};
+  // Resource limits for untrusted or unexpectedly large terminal input.
+  std::size_t max_paste_bytes{8 * 1024 * 1024};
+  std::size_t max_pending_input_events{4096};
   // Overrides the detected color depth.
   std::optional<color_depth> colors{};
 };
@@ -91,6 +95,8 @@ class application {
     opts.terminal.bracketed_paste = options_.bracketed_paste;
     opts.terminal.focus_events = options_.focus_events;
     opts.frame_interval = options_.frame_interval;
+    opts.input.max_paste_bytes = options_.max_paste_bytes;
+    opts.input.max_pending_events = options_.max_pending_input_events;
     opts.colors = options_.colors;
 
     driver d{*this};
