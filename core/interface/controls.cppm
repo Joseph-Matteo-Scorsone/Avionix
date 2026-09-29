@@ -118,6 +118,11 @@ class text final : public component {
     return *this;
   }
 
+  text& follow_tail(bool enabled) noexcept {
+    follow_tail_ = enabled;
+    return *this;
+  }
+
   void render(render_context& context) override {
     const std::uint32_t width = context.width();
     if (width == 0 || context.height() == 0) return;
@@ -141,8 +146,9 @@ class text final : public component {
       cached_data_ = content_.data();
     }
     const std::size_t rows = std::min<std::size_t>(lines_.size(), context.height());
+    const std::size_t first = follow_tail_ ? lines_.size() - rows : 0;
     for (std::size_t y = 0; y < rows; ++y) {
-      const std::string_view line = lines_[y];
+      const std::string_view line = lines_[first + y];
       const auto line_width = static_cast<std::uint32_t>(display_width(line));
       std::int32_t x = 0;
       if (align_ == alignment::center && line_width < width) {
@@ -159,6 +165,7 @@ class text final : public component {
   style_patch style_{};
   alignment align_{alignment::left};
   bool wrap_{};
+  bool follow_tail_{};
   // Line views into content_, recomputed when the width or text changes.
   std::vector<std::string_view> lines_{};
   std::uint32_t cached_width_{};
