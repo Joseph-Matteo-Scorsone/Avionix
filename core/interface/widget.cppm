@@ -53,6 +53,7 @@ class render_context {
         base_{base} {}
 
   [[nodiscard]] rect area() const noexcept { return area_; }
+  [[nodiscard]] rect clip() const noexcept { return clip_; }
   [[nodiscard]] avionix::size extent() const noexcept { return area_.extent; }
   [[nodiscard]] std::uint32_t width() const noexcept { return area_.width(); }
   [[nodiscard]] std::uint32_t height() const noexcept { return area_.height(); }
@@ -177,7 +178,33 @@ class component {
   virtual void children(std::vector<component*>& /*out*/) {}
 
   [[nodiscard]] bool focused() const noexcept { return focused_; }
-  void set_focused(bool value) noexcept { focused_ = value; }
+  virtual void on_focus_changed(bool) {}
+  virtual void on_hover_changed(bool) {}
+  virtual void on_mouse_enter() {}
+  virtual void on_mouse_leave() {}
+  void set_focused(bool value) {
+    if (focused_ == value) return;
+    focused_ = value;
+    on_focus_changed(value);
+  }
+  [[nodiscard]] bool hovered() const noexcept { return hovered_; }
+  void set_hovered(bool value) {
+    if (hovered_ == value) return;
+    hovered_ = value;
+    on_hover_changed(value);
+    if (value)
+      on_mouse_enter();
+    else
+      on_mouse_leave();
+  }
+  void clear_area() {
+    last_area_ = {};
+    set_focused(false);
+    set_hovered(false);
+    std::vector<component*> kids;
+    children(kids);
+    for (auto* child : kids) child->clear_area();
+  }
 
   // Area assigned by the most recent render, in screen coordinates. Used
   // for mouse hit testing.
@@ -186,13 +213,14 @@ class component {
   // Records the area for hit testing, then renders. Containers and the
   // application call this rather than render() directly.
   void render_in(render_context& context) {
-    last_area_ = context.area();
+    last_area_ = context.clip();
     render(context);
   }
 
  private:
   rect last_area_{};
   bool focused_{};
+  bool hovered_{};
 };
 
 // Compile-time contract for widgets that are not components.

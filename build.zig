@@ -112,6 +112,7 @@ const test_program: program_spec = .{
         "tests/event_tests.cpp",
         "tests/layout_tests.cpp",
         "tests/widget_tests.cpp",
+        "tests/feature_tests.cpp",
         "tests/terminal_tests.cpp",
     },
     .imports = &(all_internal ++ [_][]const u8{"avionix_tests.check"}),

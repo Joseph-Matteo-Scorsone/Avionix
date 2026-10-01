@@ -3,7 +3,9 @@ module;
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -60,6 +62,31 @@ class render_buffer {
   [[nodiscard]] std::span<const cell> row(std::uint32_t y) const noexcept {
     return std::span<const cell>{cells_}.subspan(std::size_t{y} * extent_.width,
                                                  extent_.width);
+  }
+
+  [[nodiscard]] std::vector<std::string> rows() const {
+    std::vector<std::string> result(height());
+    for (std::uint32_t y = 0; y < height(); ++y)
+      for (const auto& c : row(y))
+        if (!c.is_continuation()) result[y].append(c.text());
+    return result;
+  }
+  [[nodiscard]] std::optional<position> find(std::string_view text) const {
+    for (std::uint32_t y = 0; y < height(); ++y) {
+      std::string line;
+      std::vector<std::int32_t> columns;
+      for (std::uint32_t x = 0; x < width(); ++x) {
+        const auto& c =
+            at({static_cast<std::int32_t>(x), static_cast<std::int32_t>(y)});
+        if (c.is_continuation()) continue;
+        line.append(c.text());
+        columns.insert(columns.end(), c.text().size(), static_cast<std::int32_t>(x));
+      }
+      const auto offset = line.find(text);
+      if (offset != std::string::npos && offset < columns.size())
+        return position{columns[offset], static_cast<std::int32_t>(y)};
+    }
+    return std::nullopt;
   }
 
   // Precondition: area().contains(p).

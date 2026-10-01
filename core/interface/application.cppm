@@ -9,6 +9,7 @@ module;
 #include <functional>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -47,6 +48,7 @@ export namespace avionix {
 struct application_options {
   bool alternate_screen{true};
   bool mouse{true};
+  bool mouse_motion{false};
   bool bracketed_paste{true};
   bool focus_events{true};
   // Ctrl+C quits unless a widget handles it first. Raw mode delivers
@@ -64,6 +66,19 @@ struct application_options {
   std::size_t max_pending_input_events{4096};
   // Overrides the detected color depth.
   std::optional<color_depth> colors{};
+};
+
+// Explicit cancellation. Destroying a handle does not cancel the interval.
+class interval_handle {
+ public:
+  void cancel() const noexcept {
+    if (active_) *active_ = false;
+  }
+  [[nodiscard]] bool active() const noexcept { return active_ && *active_; }
+  explicit interval_handle(std::shared_ptr<bool> active) : active_{std::move(active)} {}
+
+ private:
+  std::shared_ptr<bool> active_;
 };
 
 class application {
@@ -92,6 +107,7 @@ class application {
     run_options opts;
     opts.terminal.alternate_screen = options_.alternate_screen;
     opts.terminal.mouse = options_.mouse;
+    opts.terminal.mouse_motion = options_.mouse_motion;
     opts.terminal.bracketed_paste = options_.bracketed_paste;
     opts.terminal.focus_events = options_.focus_events;
     opts.frame_interval = options_.frame_interval;
@@ -101,8 +117,11 @@ class application {
 
     driver d{*this};
     auto result = avionix::run(queue_, d, opts);
+    if (live(focused_)) focused_->set_focused(false);
+    if (live(hovered_)) hovered_->set_hovered(false);
     root_ = nullptr;
     focused_ = nullptr;
+    hovered_ = nullptr;
     running_.store(false);
     return result;
   }
@@ -128,6 +147,30 @@ class application {
     });
   }
 
+  // UI thread only. Nonpositive durations throw invalid_argument. Missed
+  // ticks coalesce into one callback. Cancellation is safe inside callbacks.
+  interval_handle set_interval(std::chrono::steady_clock::duration period,
+                               ui_callback callback) {
+    if (period <= period.zero())
+      throw std::invalid_argument("interval must be positive");
+    auto active = std::make_shared<bool>(true);
+    timers_.push_back({period, std::chrono::steady_clock::now() + period,
+                       std::move(callback), active});
+    return interval_handle{active};
+  }
+  void poll_timers(
+      std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) {
+    const auto count = timers_.size();
+    for (std::size_t i = 0; i < count; ++i) {
+      if (!*timers_[i].active || timers_[i].next > now) continue;
+      timers_[i].next = now + timers_[i].period;
+      auto callback = timers_[i].callback;
+      if (callback) callback();
+      dirty_ = true;
+    }
+    std::erase_if(timers_, [](const auto& timer) { return !*timer.active; });
+  }
+
   // Delivers a user_event through the normal event path. Thread safe.
   void notify(user_event value) { queue_.push(event{value}); }
 
@@ -146,8 +189,9 @@ class application {
   // Moves focus to `target`, which must be focusable and part of the
   // running tree.
   void focus(component& target) {
+    if (!live(&target) || !target.focusable()) return;
     if (focused_ == &target) return;
-    if (focused_ != nullptr) focused_->set_focused(false);
+    if (live(focused_)) focused_->set_focused(false);
     focused_ = &target;
     focused_->set_focused(true);
     dirty_ = true;
@@ -193,6 +237,13 @@ class application {
   struct driver {
     application& app;
 
+    void tick(std::chrono::steady_clock::time_point now) { app.poll_timers(now); }
+    auto next_deadline() const {
+      auto next = std::chrono::steady_clock::time_point::max();
+      for (const auto& timer : app.timers_)
+        if (*timer.active) next = std::min(next, timer.next);
+      return next;
+    }
     void handle(const event& value) { app.handle(value); }
     void draw(render_buffer& back) { app.draw(back); }
     [[nodiscard]] bool running() const noexcept { return !app.quit_requested_; }
@@ -217,11 +268,23 @@ class application {
   }
 
   void handle(const event& value) {
+    validate_focus();
     dirty_ = true;
     if (const auto* r = std::get_if<resize_event>(&value)) {
       screen_size_ = r->extent;
     }
     if (early_hook_ && early_hook_(value)) return;
+    validate_focus();
+    if (const auto* m = std::get_if<mouse_event>(&value)) {
+      std::vector<component*> hit;
+      hit_path(root_, m->where, hit);
+      component* next = hit.empty() ? nullptr : hit.back();
+      if (next != hovered_) {
+        if (live(hovered_)) hovered_->set_hovered(false);
+        hovered_ = next;
+        if (hovered_) hovered_->set_hovered(true);
+      }
+    }
 
     if (options_.text_selection) {
       if (const auto* m = std::get_if<mouse_event>(&value);
@@ -243,9 +306,10 @@ class application {
     bool handled = false;
     event_context context;
     for (auto it = path.rbegin(); it != path.rend() && !handled; ++it) {
-      handled = (*it)->on_event(value, context) == event_result::handled;
+      if (live(*it)) handled = (*it)->on_event(value, context) == event_result::handled;
     }
-    if (context.focus_request() != nullptr) focus(*context.focus_request());
+    validate_focus();
+    if (live(context.focus_request())) focus(*context.focus_request());
     if (context.quit_requested()) quit();
     if (handled) return;
 
@@ -277,7 +341,7 @@ class application {
       // the click.
       if (m->action == mouse_action::press && m->button == mouse_button::left) {
         for (auto it = path.rbegin(); it != path.rend(); ++it) {
-          if ((*it)->focusable()) {
+          if (live(*it) && (*it)->focusable()) {
             focus(**it);
             break;
           }
@@ -372,10 +436,23 @@ class application {
     return "\x1b]52;c;" + encoded + "\x1b\\";
   }
 
+  bool live(component* target) const {
+    if (!root_ || !target) return false;
+    std::vector<component*> path;
+    return find_path(root_, target, path);
+  }
+  void validate_focus() {
+    if (!live(focused_)) {
+      focused_ = nullptr;
+      focus_first();
+    } else if (!focused_->focusable() || !focused_->focused())
+      focus_first();
+    if (!live(hovered_) || !hovered_->hovered()) hovered_ = nullptr;
+  }
   void focus_first() {
     std::vector<component*> chain;
     collect_focusable(root_, chain);
-    if (focused_ != nullptr) focused_->set_focused(false);
+    if (live(focused_)) focused_->set_focused(false);
     focused_ = nullptr;
     if (!chain.empty()) focus(*chain.front());
   }
@@ -413,7 +490,7 @@ class application {
   // Deepest chain of components whose last drawn area contains `where`.
   // Later siblings win because they draw on top.
   static void hit_path(component* node, position where, std::vector<component*>& path) {
-    if (node == nullptr) return;
+    if (node == nullptr || !node->last_area().contains(where)) return;
     path.push_back(node);
     std::vector<component*> kids;
     node->children(kids);
@@ -425,10 +502,18 @@ class application {
     }
   }
 
+  struct timer_entry {
+    std::chrono::steady_clock::duration period;
+    std::chrono::steady_clock::time_point next;
+    ui_callback callback;
+    std::shared_ptr<bool> active;
+  };
+  std::vector<timer_entry> timers_;
   application_options options_;
   event_queue queue_{};
   component* root_{};
   component* focused_{};
+  component* hovered_{};
   frame_state frame_{};
   event_hook early_hook_{};
   event_hook late_hook_{};

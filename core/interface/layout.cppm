@@ -62,28 +62,49 @@ class stack : public component {
   }
 
   void render(render_context& context) override {
-    slots_.resize(children_.size());
-    split(bounds(context.extent()), axis_, constraints_, slots_, spacing_);
+    visible_constraints_.clear();
+    for (std::size_t i = 0; i < children_.size(); ++i)
+      if (visible_[i]) visible_constraints_.push_back(constraints_[i]);
+    slots_.resize(visible_constraints_.size());
+    split(bounds(context.extent()), axis_, visible_constraints_, slots_, spacing_);
+    std::size_t slot = 0;
     for (std::size_t i = 0; i < children_.size(); ++i) {
-      if (slots_[i].empty()) continue;
-      render_context sub = context.child(slots_[i]);
+      if (!visible_[i]) {
+        children_[i]->clear_area();
+        continue;
+      }
+      const rect area = slots_[slot++];
+      if (area.empty()) {
+        children_[i]->clear_area();
+        continue;
+      }
+      auto sub = context.child(area);
       children_[i]->render_in(sub);
     }
   }
 
+  void set_visible(std::size_t index, bool value) {
+    visible_.at(index) = value;
+    if (!value) children_.at(index)->clear_area();
+  }
+  [[nodiscard]] bool visible(std::size_t index) const { return visible_.at(index); }
   void children(std::vector<component*>& out) override {
-    for (auto& child : children_) out.push_back(child.get());
+    for (std::size_t i = 0; i < children_.size(); ++i)
+      if (visible_[i]) out.push_back(children_[i].get());
   }
 
  private:
   void insert(constraint size, std::unique_ptr<component> child) {
     constraints_.push_back(size);
+    visible_.push_back(true);
     children_.push_back(std::move(child));
   }
 
+  std::vector<bool> visible_{};
   direction axis_;
   std::uint32_t spacing_;
   std::vector<constraint> constraints_{};
+  std::vector<constraint> visible_constraints_{};
   std::vector<std::unique_ptr<component>> children_{};
   std::vector<rect> slots_{};  // reused every frame
 };
@@ -114,7 +135,10 @@ class padding final : public component {
   void render(render_context& context) override {
     const rect inner =
         bounds(context.extent()).inset(horizontal_, vertical_, horizontal_, vertical_);
-    if (inner.empty()) return;
+    if (inner.empty()) {
+      child_->clear_area();
+      return;
+    }
     render_context sub = context.child(inner);
     child_->render_in(sub);
   }
@@ -126,5 +150,39 @@ class padding final : public component {
   std::uint32_t vertical_;
   std::unique_ptr<component> child_;
 };
+
+// Children draw in insertion order. The last visible child receives hits first.
+class layer final : public component {
+ public:
+  template <typename T>
+  std::remove_cvref_t<T>& add(T&& value) {
+    auto made = make_component(std::forward<T>(value));
+    auto& ref = made.value;
+    children_.push_back(std::move(made.owner));
+    visible_.push_back(true);
+    return ref;
+  }
+  void set_visible(std::size_t index, bool value) {
+    visible_.at(index) = value;
+    if (!value) children_.at(index)->clear_area();
+  }
+  void render(render_context& context) override {
+    for (std::size_t i = 0; i < children_.size(); ++i) {
+      if (!visible_[i] || context.area().empty())
+        children_[i]->clear_area();
+      else
+        children_[i]->render_in(context);
+    }
+  }
+  void children(std::vector<component*>& out) override {
+    for (std::size_t i = 0; i < children_.size(); ++i)
+      if (visible_[i]) out.push_back(children_[i].get());
+  }
+
+ private:
+  std::vector<std::unique_ptr<component>> children_;
+  std::vector<bool> visible_;
+};
+using overlay = layer;
 
 }  // namespace avionix

@@ -113,6 +113,8 @@ std::expected<void, error> run(event_queue& queue, D& driver,
 
     while (driver.running()) {
       const auto now = clock::now();
+      if constexpr (requires { driver.tick(now); }) driver.tick(now);
+      if (!driver.running()) break;
       if (driver.needs_redraw() && now - last_frame >= options.frame_interval) {
         auto frame = render_frame(screen, *session, [&](render_buffer& back) {
           driver.draw(back);
@@ -127,9 +129,10 @@ std::expected<void, error> run(event_queue& queue, D& driver,
         last_frame = now;
       }
 
-      const auto deadline = driver.needs_redraw()
-                                ? last_frame + options.frame_interval
-                                : clock::now() + std::chrono::hours{1};
+      auto deadline = driver.needs_redraw() ? last_frame + options.frame_interval
+                                            : clock::now() + std::chrono::hours{1};
+      if constexpr (requires { driver.next_deadline(); })
+        deadline = std::min(deadline, driver.next_deadline());
       queue.drain(entries, deadline, never_stop);
       dispatch(entries, handle);
       if (std::string output = driver.take_output(); !output.empty()) {

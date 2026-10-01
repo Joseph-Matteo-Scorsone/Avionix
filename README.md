@@ -248,7 +248,7 @@ The renderer keeps both buffers as one contiguous `std::vector<cell>` each (inde
 The stable API is exactly what `import avionix;` exports:
 
 - Entities: `position`, `size`, `rect`, `color`, `colors::*`, `color_depth`, `style`, `style_patch`, `attribute`, the event types and `event`, `constraint`, `direction`, `error`, and `failure`.
-- Interfaces: `application`, `component`, the `widget` concept, `render_context`, `event_context`, `row`, `column`, `stack`, `padding`, `text`, `block`, `list_view`, `text_input`, `progress_bar`, `spacer`, and `canvas`.
+- Interfaces: `application`, `component`, the `widget` concept, `render_context`, `event_context`, `row`, `column`, `stack`, `padding`, `text`, `block`, `list_view`, `text_input`, `progress_bar`, `spacer`, `canvas`, `button`, `tabs`, `styled_text`, `scroll_view`, `text_area`, and `layer` with its `overlay` alias.
 - Selected helpers: `display_width`, `graphemes`, `grapheme_width`, `prefix_fitting_width`, `render_buffer`, and `cell`.
 
 Internal modules (`avionix.object.*`, `avionix.task.*`) can be imported, and the tests do, but they may change without notice.
@@ -347,3 +347,25 @@ benchmarks/      hot-path benchmarks
 examples/        programs that use only `import avionix;`
 libs/            vendored dependencies (none)
 ```
+
+### Visibility, interaction, and animation
+
+`stack`, `row`, and `column` expose `set_visible(index, bool)`. Hidden children retain ownership and their index, take no space or spacing, leave traversal, and clear their hit areas recursively. `layer` draws visible children into the same area in insertion order. Later children receive mouse hits first. Its `overlay` alias has the same behavior.
+
+The application validates focus against the live tree before event dispatch and after handlers. Replacing or hiding a focused subtree selects the first focusable live component on the next event. `component::on_focus_changed(bool)` runs when the focus flag changes. Enable `application_options::mouse_motion` for motion reporting. The deepest component under the mouse exposes `hovered()` and receives `on_hover_changed(bool)` and `on_mouse_enter()` or `on_mouse_leave()` notifications. Component notifications run on the UI thread.
+
+`application::set_interval(duration, callback)` schedules repeated UI callbacks and returns an `interval_handle`. Call `cancel()` explicitly. Destroying the handle leaves the interval running; the application owns its callback. Nonpositive durations throw `std::invalid_argument`. Missed ticks coalesce into one callback, and callbacks may cancel or add intervals. Creation, cancellation, and `poll_timers()` are UI-thread operations. `poll_timers(time_point)` permits deterministic timer tests. The event loop wakes for the next interval deadline and redraws after callbacks.
+
+### Additional controls
+
+`button` accepts a label, `on_press`, an enabled predicate through `set_enabled`, and `set_confirm(true)` for a second activation to confirm. Enter, Space, and primary mouse presses activate it. Losing focus disarms confirmation. `set_style` supplies normal, focused, disabled, and hover patches in that order.
+
+`tabs` accepts header labels, exposes `active`, `set_active`, and `on_change`, and responds to Left, Right, and header clicks. `set_status(width, component)` owns content in the rightmost header columns. The returned reference remains valid until status replacement or destruction.
+
+`styled_span` owns text and a `style_patch`; `styled_line` is a vector of spans. `styled_text` draws spans with explicit newlines. `list_view::set_styled_items` accepts `list_item` values containing glyph, label, and right-aligned detail spans. Existing string items and string callbacks remain available. `select_without_callback(index)` clamps selection without calling `on_select`.
+
+`scroll_view` accepts text or styled lines through `set_text` or `set_lines`, wraps by display width, and follows the tail by default. `append` adds a styled line. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel control scrolling. When scrolled away from the tail, a clickable "Jump to latest" row restores following. `set_follow_tail` and `jump_to_latest` control this behavior in code.
+
+`text_area` edits UTF-8 text across multiple lines. Shift+Enter inserts a newline; Enter calls `on_submit`. Pasted text preserves newlines and removes terminal controls. Left, Right, Backspace, Delete, Home, and End edit at grapheme boundaries. Up/Down moves the cursor between visual lines. `set_history` changes Up/Down to history navigation and preserves the draft. `on_change` observes edits. `block::set_focus_title_style` supplies a title patch while a descendant is focused.
+
+`render_buffer::rows()` returns UTF-8 row strings, skipping continuation cells and preserving trailing spaces. `find(text)` returns the first matching terminal position or `std::nullopt`, including correct columns after wide glyphs. These methods own their results and perform no terminal I/O.

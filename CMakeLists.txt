@@ -90,6 +90,7 @@ if(BUILD_TESTING)
         tests/event_tests.cpp
         tests/layout_tests.cpp
         tests/widget_tests.cpp
+        tests/feature_tests.cpp
         tests/terminal_tests.cpp
     )
     target_compile_features(avionix-tests PRIVATE cxx_std_26)
