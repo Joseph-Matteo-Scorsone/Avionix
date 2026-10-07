@@ -5,9 +5,11 @@
 //   consumer ──import avionix──► this facade
 //                                   │
 //                                   ├─► interface: application, widget, layout,
-//                                   controls ├─► entity: geometry, color, style, event,
-//                                   constraint, error └─► selected names from unicode
-//                                   and the render buffer
+//                                   │   controls, markdown
+//                                   ├─► entity: geometry, color, style, event,
+//                                   │   constraint, error, markdown
+//                                   └─► selected names from unicode and the
+//                                       render buffer
 //
 // Terminal, renderer, input decoding, and the event loop stay internal so
 // their implementation can change without breaking consumers.
@@ -20,10 +22,12 @@ export import avionix.entity.style;
 export import avionix.entity.event;
 export import avionix.entity.constraint;
 export import avionix.entity.error;
+export import avionix.entity.markdown;
 
 export import avionix.interface.widget;
 export import avionix.interface.layout;
 export import avionix.interface.controls;
+export import avionix.interface.markdown;
 export import avionix.interface.application;
 
 import avionix.entity.unicode;

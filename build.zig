@@ -39,6 +39,7 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.entity.event", .path = "core/entity/event.cppm", .imports = &.{"avionix.entity.geometry"} },
     .{ .name = "avionix.entity.constraint", .path = "core/entity/constraint.cppm", .imports = &.{"avionix.entity.geometry"} },
     .{ .name = "avionix.entity.error", .path = "core/entity/error.cppm" },
+    .{ .name = "avionix.entity.markdown", .path = "core/entity/markdown.cppm", .imports = &.{"avionix.entity.unicode"} },
 
     // object
     .{ .name = "avionix.object.terminal_capabilities", .path = "core/object/terminal_capabilities.cppm", .imports = &.{"avionix.entity.color"} },
@@ -60,6 +61,7 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.interface.widget", .path = "core/interface/widget.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.cell", "avionix.entity.event", "avionix.object.buffer" } },
     .{ .name = "avionix.interface.layout", .path = "core/interface/layout.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.event", "avionix.entity.constraint", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.controls", .path = "core/interface/controls.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.event", "avionix.interface.widget" } },
+    .{ .name = "avionix.interface.markdown", .path = "core/interface/markdown.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.markdown", "avionix.interface.widget", "avionix.interface.controls" } },
     .{ .name = "avionix.interface.application", .path = "core/interface/application.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.cell", "avionix.entity.event", "avionix.entity.error", "avionix.object.buffer", "avionix.object.event_queue", "avionix.task.run", "avionix.interface.widget" } },
 
     // public facade
@@ -71,11 +73,13 @@ const library_modules = [_]module_spec{
         "avionix.entity.event",
         "avionix.entity.constraint",
         "avionix.entity.error",
+        "avionix.entity.markdown",
         "avionix.entity.cell",
         "avionix.object.buffer",
         "avionix.interface.widget",
         "avionix.interface.layout",
         "avionix.interface.controls",
+        "avionix.interface.markdown",
         "avionix.interface.application",
     } },
 };
@@ -113,6 +117,7 @@ const test_program: program_spec = .{
         "tests/layout_tests.cpp",
         "tests/widget_tests.cpp",
         "tests/feature_tests.cpp",
+        "tests/markdown_tests.cpp",
         "tests/terminal_tests.cpp",
     },
     .imports = &(all_internal ++ [_][]const u8{"avionix_tests.check"}),
@@ -131,6 +136,7 @@ const example_programs = [_]program_spec{
     .{ .name = "hello", .sources = &.{"examples/hello.cpp"}, .imports = &.{"avionix"}, .description = "Run the hello example" },
     .{ .name = "counter", .sources = &.{"examples/counter.cpp"}, .imports = &.{"avionix"}, .description = "Run the counter example" },
     .{ .name = "dashboard", .sources = &.{"examples/dashboard.cpp"}, .imports = &.{"avionix"}, .description = "Run the dashboard example" },
+    .{ .name = "markdown", .sources = &.{"examples/markdown.cpp"}, .imports = &.{"avionix"}, .description = "Run the markdown example" },
 };
 
 fn layerOf(comptime name: []const u8) layer {
@@ -434,6 +440,7 @@ pub fn build(b: *std.Build) void {
         .{ .index = 0, .expect = "Hello from Avionix", .keys = "q" },
         .{ .index = 1, .expect = "count: 0", .keys = "++q" },
         .{ .index = 2, .expect = "Avionix dashboard", .keys = "\x03" },
+        .{ .index = 3, .expect = "Notes", .keys = "q" },
     };
     for (smoke_cases) |case| {
         const run = b.addRunArtifact(smoke);

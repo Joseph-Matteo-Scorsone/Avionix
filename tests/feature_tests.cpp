@@ -286,12 +286,48 @@ const avionix_tests::suite features{
         b = application::render_to_buffer(value, {6, 1});
         check(b.at({0, 0}).appearance().foreground == colors::blue);
       }},
-     {"focus_title_style", [] {
+     {"focus_title_style",
+      [] {
         block root{"Title", border_kind::single, button{"OK"}};
         root.set_focus_title_style({.foreground = colors::red});
         application app;
         app.simulate(root, key_press(key::enter));
         auto b = application::render_to_buffer(root, {15, 3});
         check(b.at({2, 0}).appearance().foreground == colors::red);
+      }},
+     {"copy_on_select_release",
+      [] {
+        application app{{.quit_on_ctrl_c = false}};
+        text label{"hello"};
+        (void)application::render_to_buffer(label, {10, 1});
+        app.simulate(label,
+                     mouse_event{mouse_button::left, mouse_action::press, {0, 0}});
+        app.simulate(label,
+                     mouse_event{mouse_button::left, mouse_action::drag, {4, 0}});
+        app.simulate(label,
+                     mouse_event{mouse_button::left, mouse_action::release, {4, 0}});
+        check(app.last_copied() == "hello");
+        bool late = false;
+        app.on_event([&](const event&) {
+          late = true;
+          return false;
+        });
+        app.simulate(label, key_event{key::character, U'c', modifiers::ctrl});
+        check(!late);
+        check(app.last_copied() == "hello");
+      }},
+     {"copy_on_select_can_stay_off", [] {
+        application app{{.quit_on_ctrl_c = false, .copy_on_select = false}};
+        text label{"hello"};
+        (void)application::render_to_buffer(label, {10, 1});
+        app.simulate(label,
+                     mouse_event{mouse_button::left, mouse_action::press, {0, 0}});
+        app.simulate(label,
+                     mouse_event{mouse_button::left, mouse_action::drag, {4, 0}});
+        app.simulate(label,
+                     mouse_event{mouse_button::left, mouse_action::release, {4, 0}});
+        check(app.last_copied().empty());
+        app.simulate(label, key_event{key::character, U'c', modifiers::ctrl});
+        check(app.last_copied() == "hello");
       }}}};
 }  // namespace

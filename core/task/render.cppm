@@ -14,7 +14,7 @@ import avionix.object.renderer;
 
 // One frame:
 //
-//   clear back buffer ──draw──► back buffer ──renderer::present──► bytes
+//   begin_frame ──draw──► back buffer ──renderer::present──► bytes
 //   bytes ──terminal_output::write──► terminal (one write per frame)
 //
 // The output is a concept so tests can capture frames without a terminal;
@@ -33,9 +33,8 @@ concept frame_drawer = std::invocable<F&, render_buffer&>;
 template <terminal_output Output, frame_drawer Draw>
 std::expected<frame_statistics, error> render_frame(renderer& target, Output& output,
                                                     Draw&& draw) {
-  render_buffer& back = target.back();
-  back.clear();
-  std::invoke(draw, back);
+  target.begin_frame();
+  std::invoke(draw, target.back());
   const std::string_view bytes = target.present();
   if (!bytes.empty()) {
     if (auto written = output.write(bytes); !written) {

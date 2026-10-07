@@ -178,6 +178,32 @@ const avionix_tests::suite buffer{
            check(b.row(0)[0] == cell::blank());
          }},
         {"cell_size_is_small", [] { check(sizeof(cell) <= 40); }},
+        {"link_ids_stay_with_the_url",
+         [] {
+           render_buffer front{{4, 1}};
+           check_equal(front.intern_link(""), 0);
+           const auto id = front.intern_link("https://example.com");
+           check(id != 0);
+           check_equal(front.intern_link("https://example.com"), id);
+           const auto other = front.intern_link("https://other.test");
+           check(other != id);
+           front.put_text({0, 0}, "中x", {}, front.area(), id);
+           check_equal(front.at({0, 0}).link(), id);
+           check(front.at({1, 0}).is_continuation());
+           check_equal(front.at({1, 0}).link(), id);
+           check_equal(front.at({2, 0}).link(), id);
+           check(front.link_target(id) == "https://example.com");
+
+           render_buffer back{{4, 1}};
+           back.adopt_links(front);
+           check_equal(back.intern_link("https://example.com"), id);
+           check(back.intern_link("https://other.test") == other);
+
+           front.clear();
+           check(front.link_target(id).empty());
+           check_equal(front.at({0, 0}).link(), 0);
+           check_equal(front.intern_link("https://example.com"), 1);
+         }},
     }};
 
 }  // namespace

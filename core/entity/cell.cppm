@@ -97,13 +97,19 @@ class cell {
     style_ = value;
   }
 
+  // 0 means the cell is not a hyperlink. Any other value is an index into
+  // the render buffer's link table. The id is part of the cell's value, so
+  // a link change is a cell change and the diff redraws it.
+  [[nodiscard]] constexpr std::uint16_t link() const noexcept { return link_; }
+  constexpr void set_link(std::uint16_t id) noexcept { link_ = id; }
+
   // Cells have no padding (checked below), so byte equality is value
   // equality. The diff compares every cell every frame; memcmp is several
   // times faster than member-wise comparison of the inline glyph array.
   friend constexpr bool operator==(const cell& a, const cell& b) noexcept {
     if consteval {
       return a.bytes_ == b.bytes_ && a.length_ == b.length_ && a.width_ == b.width_ &&
-             a.style_ == b.style_;
+             a.style_ == b.style_ && a.link_ == b.link_;
     } else {
       return std::memcmp(&a, &b, sizeof(cell)) == 0;
     }
@@ -114,6 +120,7 @@ class cell {
   std::uint8_t length_{1};
   std::uint8_t width_{1};
   avionix::style style_{};
+  std::uint16_t link_{};
 };
 
 static_assert(std::has_unique_object_representations_v<cell>,

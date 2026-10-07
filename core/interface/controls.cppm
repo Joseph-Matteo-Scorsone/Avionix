@@ -315,6 +315,9 @@ class block final : public component {
 struct styled_span {
   std::string text;
   style_patch appearance{};
+  // Empty when the span is not a hyperlink. draw_text emits it as OSC 8,
+  // and scroll_view activates it on a click that does not drag.
+  std::string link{};
 };
 using styled_line = std::vector<styled_span>;
 struct list_item {
@@ -772,8 +775,8 @@ class styled_text final : public component {
       std::string_view remaining = span.text;
       while (true) {
         const auto newline = remaining.find('\n');
-        at.x += static_cast<std::int32_t>(
-            context.draw_text(at, remaining.substr(0, newline), span.appearance));
+        at.x += static_cast<std::int32_t>(context.draw_text(
+            at, remaining.substr(0, newline), span.appearance, span.link));
         if (newline == std::string_view::npos) break;
         at.x = 0;
         ++at.y;
@@ -953,6 +956,8 @@ class tabs final : public component {
 
 class scroll_view final : public component {
  public:
+  using link_handler = std::function<void(const std::string& url)>;
+
   explicit scroll_view(std::string content = {}) { set_text(std::move(content)); }
   scroll_view& set_text(std::string content) {
     lines_ = {{{std::move(content), {}}}};
@@ -970,35 +975,94 @@ class scroll_view final : public component {
     follow_ = follow;
     return *this;
   }
+  // When false, each styled line is one row and is clipped instead of wrapped.
+  scroll_view& set_wrap(bool enabled) noexcept {
+    wrap_ = enabled;
+    return *this;
+  }
+  // The "Jump to latest" row. Logs want it. A document that starts at the
+  // top does not, because not following the tail is its normal state.
+  scroll_view& set_jump_prompt(bool enabled) noexcept {
+    jump_prompt_ = enabled;
+    return *this;
+  }
   void jump_to_latest() noexcept {
     follow_ = true;
     scroll_ = maximum_;
+  }
+  void scroll_to_start() noexcept {
+    follow_ = false;
+    scroll_ = 0;
+  }
+  scroll_view& on_link(link_handler handler) {
+    link_handler_ = std::move(handler);
+    return *this;
+  }
+  scroll_view& set_highlight_style(style_patch appearance) noexcept {
+    highlight_ = appearance;
+    return *this;
+  }
+  void clear_selection() noexcept {
+    anchor_ = {};
+    active_ = {};
+    selecting_ = false;
+    selection_visible_ = false;
+  }
+  [[nodiscard]] bool has_selection() const noexcept { return selection_visible_; }
+  // Visual rows joined by newlines. A wrapped row is its own line.
+  [[nodiscard]] std::string selected_text() const {
+    if (!selection_visible_ || wrapped_.empty()) return {};
+    text_point first;
+    text_point last;
+    selection_bounds(first, last);
+    std::string result;
+    for (std::size_t line = first.line; line <= last.line && line < wrapped_.size();
+         ++line) {
+      const std::string text = joined_line(wrapped_[line]);
+      const auto width = static_cast<std::uint32_t>(display_width(text));
+      const auto left = line == first.line ? first.begin : 0U;
+      const auto right = line == last.line ? last.end : width;
+      result += slice_columns(text, left, right);
+      if (line != last.line) result.push_back('\n');
+    }
+    return result;
   }
   [[nodiscard]] bool following_tail() const noexcept { return follow_; }
   [[nodiscard]] std::size_t scroll_offset() const noexcept { return scroll_; }
   [[nodiscard]] bool focusable() const noexcept override { return true; }
   void render(render_context& context) override {
     wrapped_.clear();
+    link_hits_.clear();
     const auto width = context.width() > 1 ? context.width() - 1 : context.width();
+    content_width_ = width;
     if (width == 0 || context.height() == 0) return;
-    for (const auto& line : lines_) {
-      std::string joined;
-      for (const auto& span : line) joined += span.text;
-      for (const auto piece : wrap_text(joined, width)) {
-        styled_line result;
-        const auto begin = static_cast<std::size_t>(piece.data() - joined.data());
-        const auto end = begin + piece.size();
-        std::size_t offset = 0;
-        for (const auto& span : line) {
-          const auto first = std::max(begin, offset);
-          const auto last = std::min(end, offset + span.text.size());
-          if (first < last)
-            result.push_back(
-                {span.text.substr(first - offset, last - first), span.appearance});
-          offset += span.text.size();
+    if (!wrap_) {
+      wrapped_ = lines_;
+    } else {
+      for (const auto& line : lines_) {
+        std::string joined;
+        for (const auto& span : line) joined += span.text;
+        for (const auto piece : wrap_text(joined, width)) {
+          styled_line result;
+          const auto begin = static_cast<std::size_t>(piece.data() - joined.data());
+          const auto end = begin + piece.size();
+          std::size_t offset = 0;
+          for (const auto& span : line) {
+            const auto first = std::max(begin, offset);
+            const auto last = std::min(end, offset + span.text.size());
+            if (first < last) {
+              result.push_back({span.text.substr(first - offset, last - first),
+                                span.appearance, span.link});
+            }
+            offset += span.text.size();
+          }
+          wrapped_.push_back(std::move(result));
         }
-        wrapped_.push_back(std::move(result));
       }
+    }
+    if (selection_visible_ && (wrapped_.empty() || anchor_.line >= wrapped_.size() ||
+                               active_.line >= wrapped_.size())) {
+      clear_selection();
     }
     page_ = context.height();
     auto available = page_;
@@ -1007,14 +1071,40 @@ class scroll_view final : public component {
       scroll_ = maximum_;
     else
       scroll_ = std::min(scroll_, maximum_);
-    const bool away = !follow_ && scroll_ < maximum_;
+    const bool away = jump_prompt_ && !follow_ && scroll_ < maximum_;
     if (away && available > 1) --available;
+    text_point first;
+    text_point last;
+    if (selection_visible_) selection_bounds(first, last);
     for (std::size_t i = 0; i < available && scroll_ + i < wrapped_.size(); ++i) {
+      const auto visual = scroll_ + i;
       auto row = context.child({{0, static_cast<std::int32_t>(i)}, {width, 1}});
       std::uint32_t x = 0;
-      for (const auto& span : wrapped_[scroll_ + i])
-        x += row.draw_text({static_cast<std::int32_t>(x), 0}, span.text,
-                           span.appearance);
+      for (const auto& span : wrapped_[visual]) {
+        const auto used = row.draw_text({static_cast<std::int32_t>(x), 0}, span.text,
+                                        span.appearance, span.link);
+        if (!span.link.empty() && used > 0) {
+          const rect local{{static_cast<std::int32_t>(x), static_cast<std::int32_t>(i)},
+                           {used, 1}};
+          const rect screen =
+              intersect(local.translated(context.area().origin), context.clip());
+          if (!screen.empty()) link_hits_.push_back({screen, span.link});
+        }
+        x += used;
+      }
+      if (selection_visible_ && visual >= first.line && visual <= last.line) {
+        const auto line_width =
+            static_cast<std::uint32_t>(display_width(joined_line(wrapped_[visual])));
+        const auto left = visual == first.line ? first.begin : 0U;
+        auto right = visual == last.line ? last.end : line_width;
+        if (right > width) right = width;
+        if (left < right) {
+          context.restyle(
+              {{static_cast<std::int32_t>(left), static_cast<std::int32_t>(i)},
+               {right - left, 1}},
+              highlight_);
+        }
+      }
     }
     latest_ = {};
     if (away) {
@@ -1033,9 +1123,13 @@ class scroll_view final : public component {
           "#");
     }
   }
-  event_result on_event(const event& value, event_context&) override {
+  event_result on_event(const event& value, event_context& context) override {
     std::int64_t delta = 0;
     if (const auto* k = std::get_if<key_event>(&value)) {
+      if (k->is(U'c', modifiers::ctrl) && selection_visible_) {
+        context.copy_text(selected_text());
+        return event_result::handled;
+      }
       if (k->is(key::end)) {
         jump_to_latest();
         return event_result::handled;
@@ -1056,10 +1150,36 @@ class scroll_view final : public component {
       else
         return event_result::ignored;
     } else if (const auto* m = std::get_if<mouse_event>(&value)) {
-      if (m->button == mouse_button::left && m->action == mouse_action::press &&
-          latest_.contains(m->where)) {
+      if (!selecting_ && m->button == mouse_button::left &&
+          m->action == mouse_action::press && latest_.contains(m->where)) {
         jump_to_latest();
         return event_result::handled;
+      }
+      if (m->button == mouse_button::left &&
+          (m->action == mouse_action::press || m->action == mouse_action::drag ||
+           m->action == mouse_action::release)) {
+        if (m->action == mouse_action::press) {
+          if (!in_content(m->where)) return event_result::ignored;
+          anchor_ = active_ = point_at(m->where);
+          selecting_ = true;
+          selection_visible_ = false;
+          context.capture_pointer();
+          context.request_focus(*this);
+          return event_result::handled;
+        }
+        if (selecting_) {
+          active_ = point_at(m->where);
+          selection_visible_ =
+              active_.line != anchor_.line || active_.begin != anchor_.begin;
+          if (m->action == mouse_action::release) {
+            selecting_ = false;
+            if (selection_visible_)
+              context.copy_text(selected_text());
+            else
+              activate_link(m->where);
+          }
+          return event_result::handled;
+        }
       }
       if (m->button == mouse_button::wheel_up)
         delta = -3;
@@ -1077,13 +1197,141 @@ class scroll_view final : public component {
   }
 
  private:
+  // A grapheme on a visual row. `begin` is inclusive and `end` is exclusive,
+  // both in display columns. A caret past the last grapheme has begin == end.
+  struct text_point {
+    std::size_t line{};
+    std::uint32_t begin{};
+    std::uint32_t end{};
+  };
+  struct link_hit {
+    rect area{};
+    std::string target;
+  };
+
+  [[nodiscard]] static std::string joined_line(const styled_line& line) {
+    std::string out;
+    std::size_t bytes = 0;
+    for (const auto& span : line) bytes += span.text.size();
+    out.reserve(bytes);
+    for (const auto& span : line) out += span.text;
+    return out;
+  }
+
+  // The grapheme covering `column`, or an empty range at the end of `text`.
+  [[nodiscard]] static text_point grapheme_at(std::string_view text,
+                                              std::uint32_t column) {
+    std::uint32_t col = 0;
+    std::size_t offset = 0;
+    while (offset < text.size()) {
+      const std::size_t next = next_grapheme_boundary(text, offset);
+      const auto cluster = text.substr(offset, next - offset);
+      const auto w = static_cast<std::uint32_t>(grapheme_width(cluster));
+      if (w > 0 && column < col + w) return {0, col, col + w};
+      col += w;
+      offset = next;
+    }
+    return {0, col, col};
+  }
+
+  [[nodiscard]] static std::string slice_columns(std::string_view text,
+                                                 std::uint32_t begin,
+                                                 std::uint32_t end) {
+    if (begin >= end) return {};
+    std::string out;
+    std::uint32_t col = 0;
+    std::size_t offset = 0;
+    while (offset < text.size() && col < end) {
+      const std::size_t next = next_grapheme_boundary(text, offset);
+      const auto cluster = text.substr(offset, next - offset);
+      const auto w = static_cast<std::uint32_t>(grapheme_width(cluster));
+      if ((w > 0 && col + w > begin && col < end) ||
+          (w == 0 && col >= begin && col < end))
+        out.append(cluster);
+      col += w;
+      offset = next;
+    }
+    return out;
+  }
+
+  void selection_bounds(text_point& first, text_point& last) const {
+    const bool active_first =
+        active_.line < anchor_.line ||
+        (active_.line == anchor_.line && active_.begin < anchor_.begin);
+    first = active_first ? active_ : anchor_;
+    last = active_first ? anchor_ : active_;
+  }
+
+  [[nodiscard]] bool in_content(position where) const {
+    const rect area = last_area();
+    if (wrapped_.empty() || content_width_ == 0 || !area.contains(where)) return false;
+    if (!latest_.empty() && latest_.contains(where)) return false;
+    return where.x < area.left() + static_cast<std::int32_t>(content_width_);
+  }
+
+  // Scrolls when the pointer is outside the content rows, then returns the
+  // grapheme under the pointer. One drag event past the edge moves that many
+  // rows, so the highlight follows the pointer into text that was clipped.
+  [[nodiscard]] text_point point_at(position where) {
+    const rect area = last_area();
+    if (area.empty() || wrapped_.empty()) return {};
+    const std::int32_t content_bottom = latest_.empty() ? area.bottom() : latest_.top();
+    const std::int32_t rows = content_bottom - area.top();
+    if (rows <= 0) return {};
+    std::int32_t delta = 0;
+    if (where.y < area.top())
+      delta = where.y - area.top();
+    else if (where.y >= content_bottom)
+      delta = where.y - (content_bottom - 1);
+    if (delta != 0) {
+      const auto next =
+          std::clamp(static_cast<std::int64_t>(scroll_) + delta, std::int64_t{0},
+                     static_cast<std::int64_t>(maximum_));
+      if (static_cast<std::size_t>(next) != scroll_) follow_ = false;
+      scroll_ = static_cast<std::size_t>(next);
+    }
+    const std::int32_t local_y =
+        std::clamp(where.y, area.top(), content_bottom - 1) - area.top();
+    std::int32_t local_x = 0;
+    if (content_width_ > 0) {
+      const auto right = area.left() + static_cast<std::int32_t>(content_width_) - 1;
+      local_x = std::clamp(where.x, area.left(), right) - area.left();
+    }
+    const std::size_t line =
+        std::min(scroll_ + static_cast<std::size_t>(local_y), wrapped_.size() - 1);
+    auto point =
+        grapheme_at(joined_line(wrapped_[line]), static_cast<std::uint32_t>(local_x));
+    point.line = line;
+    return point;
+  }
+
+  void activate_link(position where) {
+    if (!link_handler_) return;
+    for (const auto& hit : link_hits_) {
+      if (!hit.area.contains(where)) continue;
+      auto handler = link_handler_;
+      handler(hit.target);
+      return;
+    }
+  }
+
   std::vector<styled_line> lines_;
   std::vector<styled_line> wrapped_;
+  std::vector<link_hit> link_hits_{};
   std::size_t scroll_{};
   std::size_t maximum_{};
   std::uint32_t page_{1};
+  std::uint32_t content_width_{};
   bool follow_{true};
+  bool wrap_{true};
+  bool jump_prompt_{true};
+  bool selecting_{};
+  bool selection_visible_{};
   rect latest_{};
+  text_point anchor_{};
+  text_point active_{};
+  style_patch highlight_{.add = attribute::reverse};
+  link_handler link_handler_{};
 };
 
 class text_area final : public component {

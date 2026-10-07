@@ -25,10 +25,10 @@ Nothing else is installed or vendored. `libs/` exists for future vendored depend
 | Command | What it does |
 | --- | --- |
 | `zig build` | Builds `libavionix` and installs it with the module BMIs into `zig-out/` |
-| `zig build test` | Runs the unit tests (196 tests, no terminal needed) |
+| `zig build test` | Runs the unit tests (222 tests, no terminal needed) |
 | `zig build smoke` | Runs each example under a pseudo terminal, resizes it, sends its quit key, and checks for a clean exit |
 | `zig build bench -Doptimize=ReleaseFast` | Runs the hot-path benchmarks |
-| `zig build examples` | Builds `hello`, `counter`, and `dashboard` into `zig-out/bin` |
+| `zig build examples` | Builds `hello`, `counter`, `dashboard`, and `markdown` into `zig-out/bin` |
 | `zig build run-dashboard` | Runs one example in the current terminal |
 
 Useful options: `-Dtarget=x86_64-linux-gnu` or `-Dtarget=aarch64-macos` to cross-compile, `-Doptimize=Debug|ReleaseSafe|ReleaseFast|ReleaseSmall`, and `-Dwerror=false` to keep warnings from failing the build. Arguments after `--` go to the program, for example `zig build test -- unicode` runs the tests whose name contains `unicode`.
@@ -51,7 +51,7 @@ Build options:
 | Option | Default | Effect |
 | --- | --- | --- |
 | `BUILD_TESTING` | `ON` | Builds `avionix-tests` and the PTY smoke harness |
-| `AVIONIX_BUILD_EXAMPLES` | `ON` | Builds `hello`, `counter`, and `dashboard` |
+| `AVIONIX_BUILD_EXAMPLES` | `ON` | Builds `hello`, `counter`, `dashboard`, and `markdown` |
 | `AVIONIX_BUILD_BENCHMARKS` | `OFF` | Builds `avionix-benchmarks` |
 | `AVIONIX_WARNINGS_AS_ERRORS` | `ON` | Promotes Avionix compiler warnings to errors |
 
@@ -202,7 +202,7 @@ The code is layered, and dependencies only point down:
 lib/avionix.cppm            public facade: `import avionix;`
         │
         ▼
-core/interface              application, widget, layout, controls
+core/interface              application, widget, layout, controls, markdown
         │
         ├─► core/task       run, dispatch, render, resize
         │        │
@@ -211,7 +211,7 @@ core/interface              application, widget, layout, controls
         │        │                  terminal_capabilities
         │        │         │
         └────────┴─────────┴─► core/entity    geometry, color, style, unicode,
-                                              cell, event, constraint, error
+                                              cell, event, constraint, error, markdown
 ```
 
 - Entities are values and pure rules: no I/O, mostly `constexpr`.
@@ -248,7 +248,8 @@ The renderer keeps both buffers as one contiguous `std::vector<cell>` each (inde
 The stable API is exactly what `import avionix;` exports:
 
 - Entities: `position`, `size`, `rect`, `color`, `colors::*`, `color_depth`, `style`, `style_patch`, `attribute`, the event types and `event`, `constraint`, `direction`, `error`, and `failure`.
-- Interfaces: `application`, `component`, the `widget` concept, `render_context`, `event_context`, `row`, `column`, `stack`, `padding`, `text`, `block`, `list_view`, `text_input`, `progress_bar`, `spacer`, `canvas`, `button`, `tabs`, `styled_text`, `scroll_view`, `text_area`, and `layer` with its `overlay` alias.
+- Markdown: `parse_markdown`, `layout_markdown`, `markdown_document`, `markdown_block`, `markdown_span`, `markdown_line`, `markdown_mark`, and `markdown_role`.
+- Interfaces: `application`, `component`, the `widget` concept, `render_context`, `event_context`, `row`, `column`, `stack`, `padding`, `text`, `block`, `list_view`, `text_input`, `progress_bar`, `spacer`, `canvas`, `button`, `tabs`, `styled_text`, `scroll_view`, `text_area`, `markdown_view`, and `layer` with its `overlay` alias.
 - Selected helpers: `display_width`, `graphemes`, `grapheme_width`, `prefix_fitting_width`, `render_buffer`, and `cell`.
 
 Internal modules (`avionix.object.*`, `avionix.task.*`) can be imported, and the tests do, but they may change without notice.
@@ -362,10 +363,18 @@ The application validates focus against the live tree before event dispatch and 
 
 `tabs` accepts header labels, exposes `active`, `set_active`, and `on_change`, and responds to Left, Right, and header clicks. `set_status(width, component)` owns content in the rightmost header columns. The returned reference remains valid until status replacement or destruction.
 
-`styled_span` owns text and a `style_patch`; `styled_line` is a vector of spans. `styled_text` draws spans with explicit newlines. `list_view::set_styled_items` accepts `list_item` values containing glyph, label, and right-aligned detail spans. Existing string items and string callbacks remain available. `select_without_callback(index)` clamps selection without calling `on_select`.
+`styled_span` owns text, a `style_patch`, and `link`. `styled_line` is a vector of spans. `styled_text` draws spans with explicit newlines. A non-empty `link` is drawn as an OSC 8 hyperlink. `list_view::set_styled_items` accepts `list_item` values containing glyph, label, and right-aligned detail spans. Existing string items and string callbacks remain available. `select_without_callback(index)` clamps selection without calling `on_select`.
 
-`scroll_view` accepts text or styled lines through `set_text` or `set_lines`, wraps by display width, and follows the tail by default. `append` adds a styled line. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel control scrolling. When scrolled away from the tail, a clickable "Jump to latest" row restores following. `set_follow_tail` and `jump_to_latest` control this behavior in code.
+`scroll_view` accepts text or styled lines through `set_text` or `set_lines`, wraps by display width, and follows the tail by default. `append` adds a styled line. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel control scrolling. When scrolled away from the tail, a clickable "Jump to latest" row restores following. `set_follow_tail` and `jump_to_latest` control this behavior in code. `set_wrap(false)` keeps each styled line on one row. `set_jump_prompt(false)` hides that row, which a document wants because it starts at the top.
+
+Dragging the primary button in a `scroll_view` highlights text and captures the pointer, so the drag keeps updating after it leaves the widget. A drag above the widget or below its content rows scrolls by that distance and extends the highlight. Releasing copies the highlight through OSC 52. `selected_text()` joins the highlighted visual rows with newlines and keeps trailing spaces. Ctrl+C copies the same text and leaves the application running. A click that does not drag calls `on_link` with the URL under the pointer. `set_highlight_style` changes the highlight patch. The default is reverse video.
+
+`markdown_view` parses a document with `set_source` and draws it in a child `scroll_view`. The view returns to the top when the source changes. Headings, emphasis, strong text, strike, code, quotes, lists, rules, and links receive styles. Clicking a link calls `on_link`. The terminal also receives the URL as OSC 8. Avionix does not open a browser. Dragging selects and copies text the same way `scroll_view` does. `examples/markdown.cpp` is a complete program.
+
+`parse_markdown` reads ATX headings, paragraphs, hard breaks, emphasis, strong text, strike, inline code, fenced code, links, autolinks, images, quotes, lists, task items, and thematic breaks. `layout_markdown` wraps that document to a display width. HTML, tables, reference links, setext headings, and indented code blocks are outside this subset.
+
+Screen-level drags, on widgets that do not capture the pointer, highlight cells and copy on release when `application_options::copy_on_select` is true. The default is true. Ctrl+C copies that selection and clears it. `application::last_copied()` keeps the most recent copied string until the next copy.
 
 `text_area` edits UTF-8 text across multiple lines. Shift+Enter inserts a newline; Enter calls `on_submit`. Pasted text preserves newlines and removes terminal controls. Left, Right, Backspace, Delete, Home, and End edit at grapheme boundaries. Up/Down moves the cursor between visual lines. `set_history` changes Up/Down to history navigation and preserves the draft. `on_change` observes edits. `block::set_focus_title_style` supplies a title patch while a descendant is focused.
 
-`render_buffer::rows()` returns UTF-8 row strings, skipping continuation cells and preserving trailing spaces. `find(text)` returns the first matching terminal position or `std::nullopt`, including correct columns after wide glyphs. These methods own their results and perform no terminal I/O.
+`render_buffer::rows()` returns UTF-8 row strings, skipping continuation cells and preserving trailing spaces. `find(text)` returns the first matching terminal position or `std::nullopt`, including correct columns after wide glyphs. `cell::link()` is 0 for ordinary text. Any other value is an id into that buffer's link table, and `link_target(id)` returns the URL. `clear` and `resize` drop the table. These methods own their results and perform no terminal I/O.

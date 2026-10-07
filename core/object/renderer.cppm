@@ -164,6 +164,16 @@ class renderer {
   // Forces the next present() to clear the screen and repaint.
   void invalidate() noexcept { full_redraw_ = true; }
 
+  // Clears the back buffer and copies the front buffer's link table into
+  // it. Widgets draw after this, so a URL keeps the same cell link id
+  // across frames and a different URL is a different id. render_frame
+  // calls this; callers that clear the back buffer themselves and draw
+  // hyperlinks must call it too, or a reused id can hide a URL change.
+  void begin_frame() {
+    back_.clear();
+    back_.adopt_links(front_);
+  }
+
   void set_color_depth(color_depth depth) noexcept {
     encoder_.set_color_depth(depth);
     invalidate();
@@ -223,11 +233,15 @@ class renderer {
         }
         encoder_.move_to(
             {static_cast<std::int32_t>(x), static_cast<std::int32_t>(run.y)});
+        encoder_.set_link(back_.link_target(c.link()));
         encoder_.set_style(c.appearance());
         encoder_.write_glyph(c.text(), c.width());
         ++stats_.cells_written;
       }
     }
+    // Already written text keeps its link. Closing here keeps the cursor
+    // and the next frame from inheriting the last run's URL.
+    encoder_.set_link({});
 
     if (cursor_request_) {
       encoder_.move_to(*cursor_request_);

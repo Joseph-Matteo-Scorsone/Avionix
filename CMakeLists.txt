@@ -20,6 +20,7 @@ set(avionix_modules
     core/entity/event.cppm
     core/entity/constraint.cppm
     core/entity/error.cppm
+    core/entity/markdown.cppm
     core/object/terminal_capabilities.cppm
     core/object/terminal.cppm
     core/object/ansi_encoder.cppm
@@ -35,6 +36,7 @@ set(avionix_modules
     core/interface/widget.cppm
     core/interface/layout.cppm
     core/interface/controls.cppm
+    core/interface/markdown.cppm
     core/interface/application.cppm
     lib/avionix.cppm
 )
@@ -91,6 +93,7 @@ if(BUILD_TESTING)
         tests/layout_tests.cpp
         tests/widget_tests.cpp
         tests/feature_tests.cpp
+        tests/markdown_tests.cpp
         tests/terminal_tests.cpp
     )
     target_compile_features(avionix-tests PRIVATE cxx_std_26)
@@ -106,7 +109,7 @@ if(BUILD_TESTING)
 endif()
 
 if(AVIONIX_BUILD_EXAMPLES)
-    foreach(example IN ITEMS hello counter dashboard)
+    foreach(example IN ITEMS hello counter dashboard markdown)
         add_executable(avionix-${example} examples/${example}.cpp)
         target_compile_features(avionix-${example} PRIVATE cxx_std_26)
         target_link_libraries(avionix-${example} PRIVATE avionix)

@@ -5,6 +5,7 @@ module;
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -75,16 +76,25 @@ class render_context {
   }
 
   // Draws UTF-8 text on one row at a local position. Returns the columns
-  // advanced (the text's display width, even when clipped).
+  // advanced (the text's display width, even when clipped). `hyperlink`
+  // is a URL attached to every cell of the text. The renderer emits it as
+  // an OSC 8 hyperlink. An empty URL draws ordinary text.
   std::uint32_t draw_text(position local, std::string_view text,
-                          const style_patch& patch = {}) const {
-    return buffer_->put_text(local + area_.origin, text, apply(base_, patch), clip_);
+                          const style_patch& patch = {},
+                          std::string_view hyperlink = {}) const {
+    const std::uint16_t link =
+        hyperlink.empty() ? std::uint16_t{0} : buffer_->intern_link(hyperlink);
+    return buffer_->put_text(local + area_.origin, text, apply(base_, patch), clip_,
+                             link);
   }
 
   // Draws text using an absolute style instead of patching the base.
   std::uint32_t draw_text_styled(position local, std::string_view text,
-                                 const style& appearance) const {
-    return buffer_->put_text(local + area_.origin, text, appearance, clip_);
+                                 const style& appearance,
+                                 std::string_view hyperlink = {}) const {
+    const std::uint16_t link =
+        hyperlink.empty() ? std::uint16_t{0} : buffer_->intern_link(hyperlink);
+    return buffer_->put_text(local + area_.origin, text, appearance, clip_, link);
   }
 
   // Fills a local rect with a single narrow grapheme (default: space).
@@ -141,12 +151,25 @@ class event_context {
   void request_quit() noexcept { quit_ = true; }
   void request_focus(component& target) noexcept { focus_ = &target; }
 
+  // Mouse events through release go to this widget, including drags that
+  // leave its area. The application drops the capture on release. Used by
+  // text selection that scrolls while the pointer is held.
+  void capture_pointer() noexcept { capture_pointer_ = true; }
+
+  // Asks the application to copy `text` to the terminal clipboard with
+  // OSC 52. The application owns the bytes it writes. Empty text is ignored.
+  void copy_text(std::string text) { copy_ = std::move(text); }
+
   [[nodiscard]] bool quit_requested() const noexcept { return quit_; }
   [[nodiscard]] component* focus_request() const noexcept { return focus_; }
+  [[nodiscard]] bool pointer_captured() const noexcept { return capture_pointer_; }
+  [[nodiscard]] std::string take_copy() { return std::exchange(copy_, {}); }
 
  private:
   component* focus_{};
+  std::string copy_{};
   bool quit_{};
+  bool capture_pointer_{};
 };
 
 // Base for runtime-composed widgets. Instances are owned by their parent

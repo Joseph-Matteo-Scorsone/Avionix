@@ -43,6 +43,21 @@ class virtual_terminal {
         while (j < bytes.size() && !(bytes[j] >= 0x40 && bytes[j] <= 0x7e)) ++j;
         csi(bytes.substr(i + 2, j - i - 2), bytes[j]);
         i = j + 1;
+      } else if (bytes[i] == '\x1b' && i + 1 < bytes.size() && bytes[i + 1] == ']') {
+        // OSC, including hyperlinks (OSC 8) and clipboard copies (OSC 52).
+        // Terminated by BEL or ST (ESC \). The text that follows is cells.
+        i += 2;
+        while (i < bytes.size()) {
+          if (bytes[i] == '\x07') {
+            ++i;
+            break;
+          }
+          if (bytes[i] == '\x1b' && i + 1 < bytes.size() && bytes[i + 1] == '\\') {
+            i += 2;
+            break;
+          }
+          ++i;
+        }
       } else if (bytes[i] == '\r') {
         x_ = 0;
         ++i;
@@ -425,6 +440,17 @@ const avionix_tests::suite present{
          }},
         {"zero_size_is_clamped",
          [] { check(clamp_terminal_size({0, 0}) == size{1, 1}); }},
+        {"hyperlink_text_survives_osc",
+         [] {
+           renderer r{color_depth::truecolor, false};
+           r.resize({8, 1});
+           r.begin_frame();
+           const auto id = r.back().intern_link("https://example.com");
+           r.back().put_text({0, 0}, "docs", {}, r.back().area(), id);
+           virtual_terminal vt{{8, 1}};
+           vt.apply(r.present());
+           check(vt.row(0) == "docs    ");
+         }},
     }};
 
 const avionix_tests::suite frame_task{
@@ -454,6 +480,32 @@ const avionix_tests::suite frame_task{
            (void)render_frame(r, out, draw);
            (void)render_frame(r, out, draw);
            check_equal(out.writes, 1);
+         }},
+        {"successive_frames_keep_link_identity",
+         [] {
+           renderer r{color_depth::truecolor, false};
+           r.resize({12, 1});
+           capture_output out;
+           const auto draw = [](render_buffer& back, std::string_view url) {
+             const auto id = back.intern_link(url);
+             back.put_text({0, 0}, "docs", {}, back.area(), id);
+           };
+           check(render_frame(r, out, [&](render_buffer& back) {
+                   draw(back, "https://example.com");
+                 }).has_value());
+           check(out.bytes.find("\x1b]8;;https://example.com\x1b\\") !=
+                 std::string::npos);
+           check(out.bytes.find("\x1b]8;;\x1b\\") != std::string::npos);
+           check(render_frame(r, out, [&](render_buffer& back) {
+                   draw(back, "https://example.com");
+                 }).has_value());
+           check_equal(out.writes, 1);
+           check(render_frame(r, out, [&](render_buffer& back) {
+                   draw(back, "https://other.test");
+                 }).has_value());
+           check(out.bytes.find("\x1b]8;;https://other.test\x1b\\") !=
+                 std::string::npos);
+           check_equal(out.writes, 2);
          }},
         {"write_failure_invalidates",
          [] {

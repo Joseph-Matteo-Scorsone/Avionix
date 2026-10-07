@@ -56,10 +56,12 @@ struct application_options {
   bool quit_on_ctrl_c{true};
   // Tab / Shift+Tab move focus unless the focused widget handles them.
   bool tab_moves_focus{true};
-  // Dragging the primary mouse button selects rendered cells. Ctrl+C
-  // copies an active selection through OSC 52; otherwise it keeps its
-  // normal quit behavior.
+  // Dragging the primary mouse button highlights rendered cells. Widgets
+  // that capture the pointer, such as scroll_view and markdown_view, select
+  // their own text instead and scroll when the drag leaves them.
   bool text_selection{true};
+  // Releasing a drag copies the highlighted text through OSC 52.
+  bool copy_on_select{true};
   std::chrono::milliseconds frame_interval{16};
   // Resource limits for untrusted or unexpectedly large terminal input.
   std::size_t max_paste_bytes{8 * 1024 * 1024};
@@ -102,6 +104,9 @@ class application {
     root_ = &root;
     quit_requested_ = false;
     dirty_ = true;
+    pointer_capture_ = nullptr;
+    selecting_ = false;
+    selection_visible_ = false;
     focus_first();
 
     run_options opts;
@@ -122,6 +127,7 @@ class application {
     root_ = nullptr;
     focused_ = nullptr;
     hovered_ = nullptr;
+    pointer_capture_ = nullptr;
     running_.store(false);
     return result;
   }
@@ -198,6 +204,11 @@ class application {
   }
 
   [[nodiscard]] component* focused() const noexcept { return focused_; }
+
+  // Plain text of the most recent selection copy. Empty until a drag
+  // release or Ctrl+C copies something. The string remains valid until the
+  // next copy. During run(), the terminal also receives that text as OSC 52.
+  [[nodiscard]] const std::string& last_copied() const noexcept { return last_copied_; }
 
   // Moves focus to the next (or previous) focusable component in tree
   // order, wrapping around.
@@ -286,6 +297,23 @@ class application {
       }
     }
 
+    if (const auto* captured = std::get_if<mouse_event>(&value);
+        captured != nullptr && live(pointer_capture_)) {
+      event_context captured_context;
+      component* target = pointer_capture_;
+      const bool captured_handled =
+          target->on_event(value, captured_context) == event_result::handled;
+      publish_copy(captured_context.take_copy());
+      validate_focus();
+      if (live(captured_context.focus_request()))
+        focus(*captured_context.focus_request());
+      if (captured_context.quit_requested()) quit();
+      if (captured->action == mouse_action::release || !live(target)) {
+        pointer_capture_ = nullptr;
+      }
+      if (captured_handled) return;
+    }
+
     if (options_.text_selection) {
       if (const auto* m = std::get_if<mouse_event>(&value);
           m != nullptr && handle_selection_mouse(*m)) {
@@ -304,9 +332,19 @@ class application {
     }
 
     bool handled = false;
+    component* handler = nullptr;
     event_context context;
     for (auto it = path.rbegin(); it != path.rend() && !handled; ++it) {
-      if (live(*it)) handled = (*it)->on_event(value, context) == event_result::handled;
+      if (live(*it) && (*it)->on_event(value, context) == event_result::handled) {
+        handled = true;
+        handler = *it;
+      }
+    }
+    publish_copy(context.take_copy());
+    if (context.pointer_captured() && live(handler)) {
+      pointer_capture_ = handler;
+      selecting_ = false;
+      selection_visible_ = false;
     }
     validate_focus();
     if (live(context.focus_request())) focus(*context.focus_request());
@@ -316,7 +354,8 @@ class application {
     if (const auto* k = std::get_if<key_event>(&value)) {
       if (k->is(U'c', modifiers::ctrl)) {
         if (selection_visible_) {
-          pending_output_ = osc52(selected_text());
+          ensure_rendered();
+          publish_copy(selected_text());
           selection_visible_ = false;
           selecting_ = false;
           dirty_ = true;
@@ -370,6 +409,10 @@ class application {
       selection_active_ = mouse.where;
       selection_visible_ = selection_visible_ || selection_active_ != selection_anchor_;
       selecting_ = false;
+      if (selection_visible_ && options_.copy_on_select) {
+        ensure_rendered();
+        publish_copy(selected_text());
+      }
       return selection_visible_;
     }
     return false;
@@ -415,6 +458,22 @@ class application {
       if (y != last.y) result.push_back('\n');
     }
     return result;
+  }
+
+  void publish_copy(std::string text) {
+    if (text.empty()) return;
+    last_copied_ = std::move(text);
+    pending_output_ = osc52(last_copied_);
+  }
+
+  // simulate() has no frame loop, so the first copy draws the root into
+  // rendered_ when the root was already laid out at the origin.
+  void ensure_rendered() {
+    if (rendered_.width() != 0 || root_ == nullptr) return;
+    const rect area = root_->last_area();
+    if (area.origin == position{} && !area.empty()) {
+      rendered_ = render_to_buffer(*root_, area.extent);
+    }
   }
 
   [[nodiscard]] static std::string osc52(std::string_view text) {
@@ -514,6 +573,7 @@ class application {
   component* root_{};
   component* focused_{};
   component* hovered_{};
+  component* pointer_capture_{};
   frame_state frame_{};
   event_hook early_hook_{};
   event_hook late_hook_{};
@@ -522,6 +582,7 @@ class application {
   position selection_anchor_{};
   position selection_active_{};
   std::string pending_output_{};
+  std::string last_copied_{};
   std::atomic<bool> running_{false};
   bool selecting_{};
   bool selection_visible_{};

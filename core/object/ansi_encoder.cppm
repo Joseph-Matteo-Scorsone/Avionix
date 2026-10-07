@@ -46,6 +46,31 @@ class ansi_encoder {
   void forget_state() noexcept {
     cursor_.reset();
     pen_.reset();
+    // The terminal's hyperlink state is unknown after a full reset. The
+    // next set_link emits a close before trusting current_link_.
+    link_unknown_ = true;
+    current_link_.clear();
+  }
+
+  // OSC 8 hyperlink. An empty URL closes the current link. The terminal
+  // keeps the link on text already written; this only affects text written
+  // afterwards. Controls and DEL are omitted so a URL cannot inject ESC.
+  void set_link(std::string_view url) {
+    if (!link_unknown_ && url == current_link_) return;
+    const bool open = has_link_text(url);
+    if (link_unknown_ || !current_link_.empty()) out_.append("\x1b]8;;\x1b\\");
+    link_unknown_ = false;
+    if (!open) {
+      current_link_.clear();
+      return;
+    }
+    current_link_.assign(url.begin(), url.end());
+    out_.append("\x1b]8;;");
+    for (const char byte : url) {
+      const auto c = static_cast<unsigned char>(byte);
+      if (c >= 0x20 && c != 0x7F) out_.push_back(byte);
+    }
+    out_.append("\x1b\\");
   }
 
   void move_to(position target) {
@@ -211,6 +236,14 @@ class ansi_encoder {
     std::size_t count_{};
   };
 
+  [[nodiscard]] static bool has_link_text(std::string_view url) noexcept {
+    for (const char byte : url) {
+      const auto c = static_cast<unsigned char>(byte);
+      if (c >= 0x20 && c != 0x7F) return true;
+    }
+    return false;
+  }
+
   static void append_attributes_on(params& p, attribute set) {
     if (has(set, attribute::bold)) p.add(1);
     if (has(set, attribute::dim)) p.add(2);
@@ -281,10 +314,12 @@ class ansi_encoder {
   }
 
   std::string out_;
+  std::string current_link_{};
   color_depth depth_;
   std::uint32_t screen_width_{};
   std::optional<position> cursor_{};
   std::optional<style> pen_{};
+  bool link_unknown_{};
 };
 
 }  // namespace avionix
