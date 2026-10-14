@@ -1341,6 +1341,19 @@ class text_area final : public component {
   text_area& set_value(std::string value) {
     value_ = sanitize(value);
     cursor_ = value_.size();
+    anchor_.reset();
+    selecting_ = false;
+    return *this;
+  }
+  // The selected bytes, empty when nothing is selected. The selection runs
+  // from the anchor to the cursor in either direction.
+  [[nodiscard]] std::string_view selected_text() const noexcept {
+    const auto [start, end] = selection();
+    return std::string_view{value_}.substr(start, end - start);
+  }
+  text_area& select_all() {
+    anchor_ = 0;
+    cursor_ = value_.size();
     return *this;
   }
   text_area& on_submit(text_handler callback) {
@@ -1363,14 +1376,35 @@ class text_area final : public component {
     width_ = width;
     const auto lines = visual_lines(width);
     const auto [cursor_row, cursor_col] = cursor_position(lines);
+    // Never scroll past the last line, so a taller area shows earlier lines.
+    const auto last_top =
+        lines.size() > context.height() ? lines.size() - context.height() : 0;
+    if (scroll_ > last_top) scroll_ = static_cast<std::uint32_t>(last_top);
     if (cursor_row < scroll_) scroll_ = cursor_row;
     if (cursor_row >= scroll_ + context.height())
       scroll_ = cursor_row - context.height() + 1;
+    const auto [start, end] = selection();
+    const std::string_view text{value_};
     for (std::size_t i = scroll_; i < lines.size() && i - scroll_ < context.height();
-         ++i)
-      context.draw_text({0, static_cast<std::int32_t>(i - scroll_)},
-                        std::string_view{value_}.substr(
-                            lines[i].first, lines[i].second - lines[i].first));
+         ++i) {
+      const auto y = static_cast<std::int32_t>(i - scroll_);
+      const auto [first, last] = lines[i];
+      context.draw_text({0, y}, text.substr(first, last - first));
+      // Redraw the selected part of this row reversed.
+      const auto from = std::clamp(start, first, last);
+      const auto to = std::clamp(end, first, last);
+      if (from < to)
+        context.draw_text(
+            {static_cast<std::int32_t>(display_width(text.substr(first, from - first))),
+             y},
+            text.substr(from, to - from), highlight_);
+      // A selected line break shows as one reversed cell after the row.
+      if (start <= last && last < end && last < value_.size() && value_[last] == '\n')
+        context.draw_text(
+            {static_cast<std::int32_t>(display_width(text.substr(first, last - first))),
+             y},
+            " ", highlight_);
+    }
     if (focused())
       context.set_cursor({static_cast<std::int32_t>(cursor_col),
                           static_cast<std::int32_t>(cursor_row - scroll_)});
@@ -1382,16 +1416,55 @@ class text_area final : public component {
       return event_result::handled;
     }
     if (const auto* m = std::get_if<mouse_event>(&value)) {
-      if (m->button == mouse_button::left && m->action == mouse_action::press &&
-          last_area().contains(m->where)) {
+      if (m->button != mouse_button::left) return event_result::ignored;
+      if (m->action == mouse_action::press) {
+        if (!last_area().contains(m->where)) return event_result::ignored;
+        // Shift+click extends the selection from where it was anchored.
+        move_to(offset_at(m->where), has(m->mods, modifiers::shift));
+        if (!anchor_) anchor_ = cursor_;
+        pressed_at_ = m->where;
+        pressed_cursor_ = cursor_;
+        selecting_ = true;
+        // Drags go here, not to the application's screen selection, and
+        // keep extending after the pointer leaves the area.
+        context.capture_pointer();
         context.request_focus(*this);
         return event_result::handled;
       }
-      return event_result::ignored;
+      if (!selecting_ ||
+          (m->action != mouse_action::drag && m->action != mouse_action::release))
+        return event_result::ignored;
+      // Like screen selection, a forward drag includes the cell under the
+      // pointer. Returning to the press point restores the press cursor.
+      auto at = offset_at(m->where);
+      if (m->where != pressed_at_ && at >= *anchor_ && at < value_.size() &&
+          value_[at] != '\n')
+        at = next_grapheme_boundary(value_, at);
+      cursor_ = m->where == pressed_at_ ? pressed_cursor_ : at;
+      if (m->action == mouse_action::release) {
+        selecting_ = false;
+        if (has_selection())
+          context.copy_text(std::string{selected_text()});
+        else
+          anchor_.reset();
+      }
+      return event_result::handled;
     }
     const auto* k = std::get_if<key_event>(&value);
     if (!k) return event_result::ignored;
-    if (k->is(key::enter, modifiers::shift))
+    const bool extend = k->mods == modifiers::shift;
+    const bool moves = k->mods == modifiers::none || extend;
+    if (k->is(U'a', modifiers::ctrl))
+      select_all();
+    else if (k->is(U'c', modifiers::ctrl) || k->is(U'x', modifiers::ctrl)) {
+      // Without a selection, Ctrl+C falls through to the application.
+      if (!has_selection()) return event_result::ignored;
+      context.copy_text(std::string{selected_text()});
+      if (k->character == U'x') {
+        erase_selection();
+        changed();
+      }
+    } else if (k->is(key::enter, modifiers::shift))
       insert("\n");
     else if (k->is(key::enter)) {
       if (submit_) submit_(value_);
@@ -1400,44 +1473,41 @@ class text_area final : public component {
       std::array<char, 4> bytes{};
       const auto count = encode_utf8(k->character, bytes);
       insert(sanitize({bytes.data(), count}));
-    } else if (k->is(key::left))
-      cursor_ = previous();
-    else if (k->is(key::right))
-      cursor_ = next_grapheme_boundary(value_, cursor_);
-    else if (k->is(key::backspace)) {
-      const auto start = previous();
-      value_.erase(start, cursor_ - start);
-      cursor_ = start;
+    } else if (moves && k->code == key::left) {
+      // A plain arrow collapses a selection to the side it points at.
+      move_to(!extend && has_selection() ? selection().first : previous(), extend);
+    } else if (moves && k->code == key::right) {
+      move_to(!extend && has_selection() ? selection().second
+                                         : next_grapheme_boundary(value_, cursor_),
+              extend);
+    } else if (k->is(key::backspace)) {
+      if (!erase_selection()) {
+        const auto start = previous();
+        value_.erase(start, cursor_ - start);
+        cursor_ = start;
+      }
       changed();
     } else if (k->is(key::del)) {
-      value_.erase(cursor_, next_grapheme_boundary(value_, cursor_) - cursor_);
+      if (!erase_selection())
+        value_.erase(cursor_, next_grapheme_boundary(value_, cursor_) - cursor_);
       changed();
-    } else if (k->is(key::home)) {
+    } else if (moves && k->code == key::home) {
       const auto start =
           cursor_ == 0 ? std::string::npos : value_.rfind('\n', cursor_ - 1);
-      cursor_ = start == std::string::npos ? 0 : start + 1;
-    } else if (k->is(key::end)) {
+      move_to(start == std::string::npos ? 0 : start + 1, extend);
+    } else if (moves && k->code == key::end) {
       const auto end = value_.find('\n', cursor_);
-      cursor_ = end == std::string::npos ? value_.size() : end;
-    } else if (k->is(key::up) || k->is(key::down)) {
-      if (history_.empty()) {
+      move_to(end == std::string::npos ? value_.size() : end, extend);
+    } else if (moves && (k->code == key::up || k->code == key::down)) {
+      // Shift always moves by row; plain arrows recall history when there is one.
+      if (extend || history_.empty()) {
         const auto lines = visual_lines(width_);
         const auto [row, column] = cursor_position(lines);
         const auto next =
-            k->is(key::up)
+            k->code == key::up
                 ? (row == 0 ? 0 : row - 1)
                 : std::min(row + 1, static_cast<std::uint32_t>(lines.size() - 1));
-        auto offset = lines[next].first;
-        std::uint32_t used = 0;
-        while (offset < lines[next].second) {
-          const auto end = next_grapheme_boundary(value_, offset);
-          const auto cells =
-              grapheme_width(std::string_view{value_}.substr(offset, end - offset));
-          if (used + cells > column) break;
-          used += cells;
-          offset = end;
-        }
-        cursor_ = offset;
+        move_to(offset_in_row(lines, next, column), extend);
         return event_result::handled;
       }
       if (history_index_ == history_.size()) draft_ = value_;
@@ -1452,6 +1522,58 @@ class text_area final : public component {
 
  private:
   using line_range = std::pair<std::size_t, std::size_t>;
+  [[nodiscard]] bool has_selection() const noexcept {
+    return anchor_ && *anchor_ != cursor_;
+  }
+  // Byte range [first, second); empty at the cursor when nothing is selected.
+  [[nodiscard]] line_range selection() const noexcept {
+    if (!has_selection()) return {cursor_, cursor_};
+    return std::minmax(*anchor_, cursor_);
+  }
+  // Moves the cursor. `extend` keeps or starts the selection; otherwise it
+  // is dropped.
+  void move_to(std::size_t offset, bool extend) {
+    if (!extend)
+      anchor_.reset();
+    else if (!anchor_)
+      anchor_ = cursor_;
+    cursor_ = offset;
+  }
+  bool erase_selection() {
+    if (!has_selection()) return false;
+    const auto [start, end] = selection();
+    value_.erase(start, end - start);
+    cursor_ = start;
+    anchor_.reset();
+    return true;
+  }
+  // The offset of the cluster that starts at or before `column` on `row`.
+  std::size_t offset_in_row(const std::vector<line_range>& lines, std::size_t row,
+                            std::uint32_t column) const {
+    auto offset = lines[row].first;
+    std::uint32_t used = 0;
+    while (offset < lines[row].second) {
+      const auto end = next_grapheme_boundary(value_, offset);
+      const auto cells =
+          grapheme_width(std::string_view{value_}.substr(offset, end - offset));
+      if (used + cells > column) break;
+      used += cells;
+      offset = end;
+    }
+    return offset;
+  }
+  // The offset under a screen cell. Points above or below the area reach one
+  // row past the visible ones, so a held drag scrolls through the draft.
+  std::size_t offset_at(position where) const {
+    const auto lines = visual_lines(width_);
+    const auto area = last_area();
+    const auto row = std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(scroll_) + where.y - area.origin.y, 0,
+        static_cast<std::int64_t>(lines.size()) - 1);
+    return offset_in_row(
+        lines, static_cast<std::size_t>(row),
+        static_cast<std::uint32_t>(std::max(0, where.x - area.origin.x)));
+  }
   std::vector<line_range> visual_lines(std::uint32_t width) const {
     std::vector<line_range> lines;
     std::size_t start = 0, offset = 0;
@@ -1513,6 +1635,7 @@ class text_area final : public component {
     return before;
   }
   void insert(std::string_view bytes) {
+    erase_selection();
     value_.insert(cursor_, bytes);
     cursor_ += bytes.size();
     changed();
@@ -1522,6 +1645,11 @@ class text_area final : public component {
   }
   std::string value_;
   std::size_t cursor_{};
+  std::optional<std::size_t> anchor_{};
+  bool selecting_{};
+  position pressed_at_{};
+  std::size_t pressed_cursor_{};
+  style_patch highlight_{.add = attribute::reverse};
   std::uint32_t scroll_{};
   std::uint32_t width_{80};
   std::vector<std::string> history_;
