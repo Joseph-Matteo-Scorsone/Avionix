@@ -3,6 +3,7 @@ module;
 #include <cstdint>
 #include <string>
 #include <variant>
+#include <vector>
 
 export module avionix.entity.event;
 
@@ -125,6 +126,13 @@ struct paste_event {
   friend bool operator==(const paste_event&, const paste_event&) = default;
 };
 
+// Native backend-supplied paths, encoded as UTF-8. Never inferred from text.
+// Current terminal backends do not produce this event.
+struct file_drop_event {
+  std::vector<std::string> paths;
+  friend bool operator==(const file_drop_event&, const file_drop_event&) = default;
+};
+
 struct resize_event {
   avionix::size extent{};
 
@@ -150,7 +158,7 @@ struct user_event {
 };
 
 using event = std::variant<key_event, mouse_event, paste_event, resize_event,
-                           focus_event, user_event>;
+                           focus_event, user_event, file_drop_event>;
 
 // The alternative held by `value`, or nullptr. Lets consumers inspect events
 // without including <variant>; std::visit remains available for exhaustive

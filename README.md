@@ -1,5 +1,8 @@
 # Avionix
 
+For paste interception, native-drop limitations, and explicit clipboard images,
+see [attachment input](docs/attachment-input.md) and `examples/attachments.cpp`.
+
 Avionix is a terminal user interface library written in C++26 with C++ modules. It owns terminal setup and restoration, input decoding, layout, a double-buffered diff renderer, widgets, and the event loop. It has no runtime dependencies beyond the C++ standard library and the platform APIs.
 
 ```cpp
@@ -22,14 +25,14 @@ Nothing else is installed or vendored. `libs/` exists for future vendored depend
 
 ## Build commands
 
-| Command | What it does |
-| --- | --- |
-| `zig build` | Builds `libavionix` and installs it with the module BMIs into `zig-out/` |
-| `zig build test` | Runs the unit tests (222 tests, no terminal needed) |
-| `zig build smoke` | Runs each example under a pseudo terminal, resizes it, sends its quit key, and checks for a clean exit |
-| `zig build bench -Doptimize=ReleaseFast` | Runs the hot-path benchmarks |
-| `zig build examples` | Builds `hello`, `counter`, `dashboard`, and `markdown` into `zig-out/bin` |
-| `zig build run-dashboard` | Runs one example in the current terminal |
+| Command                                  | What it does                                                                                           |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `zig build`                              | Builds `libavionix` and installs it with the module BMIs into `zig-out/`                               |
+| `zig build test`                         | Runs the unit tests (230 tests, no terminal needed)                                                    |
+| `zig build smoke`                        | Runs each example under a pseudo terminal, resizes it, sends its quit key, and checks for a clean exit |
+| `zig build bench -Doptimize=ReleaseFast` | Runs the hot-path benchmarks                                                                           |
+| `zig build examples`                     | Builds `hello`, `counter`, `dashboard`, `markdown`, and `attachments` into `zig-out/bin`               |
+| `zig build run-dashboard`                | Runs one example in the current terminal                                                               |
 
 Useful options: `-Dtarget=x86_64-linux-gnu` or `-Dtarget=aarch64-macos` to cross-compile, `-Doptimize=Debug|ReleaseSafe|ReleaseFast|ReleaseSmall`, and `-Dwerror=false` to keep warnings from failing the build. Arguments after `--` go to the program, for example `zig build test -- unicode` runs the tests whose name contains `unicode`.
 
@@ -48,12 +51,12 @@ On Windows, replace `clang++` with the full path to `clang++.exe` when it is not
 
 Build options:
 
-| Option | Default | Effect |
-| --- | --- | --- |
-| `BUILD_TESTING` | `ON` | Builds `avionix-tests` and the PTY smoke harness |
-| `AVIONIX_BUILD_EXAMPLES` | `ON` | Builds `hello`, `counter`, `dashboard`, and `markdown` |
-| `AVIONIX_BUILD_BENCHMARKS` | `OFF` | Builds `avionix-benchmarks` |
-| `AVIONIX_WARNINGS_AS_ERRORS` | `ON` | Promotes Avionix compiler warnings to errors |
+| Option                       | Default | Effect                                                 |
+| ---------------------------- | ------- | ------------------------------------------------------ |
+| `BUILD_TESTING`              | `ON`    | Builds `avionix-tests` and the PTY smoke harness       |
+| `AVIONIX_BUILD_EXAMPLES`     | `ON`    | Builds `hello`, `counter`, `dashboard`, and `markdown` |
+| `AVIONIX_BUILD_BENCHMARKS`   | `OFF`   | Builds `avionix-benchmarks`                            |
+| `AVIONIX_WARNINGS_AS_ERRORS` | `ON`    | Promotes Avionix compiler warnings to errors           |
 
 Configure a release benchmark build and install the library:
 
@@ -128,6 +131,9 @@ zig c++ -std=c++2c -fno-sized-deallocation -O0 -g -fsanitize-trap=undefined \
     -fprebuilt-module-path=zig-out/modules -x c++ -c main.cpp -o main.o
 zig c++ main.o zig-out/lib/libavionix.a -o app    # zig-out/lib/avionix.lib on Windows
 ```
+
+On Windows, direct linker invocations also need `-luser32` for clipboard access.
+The Zig and CMake targets propagate this dependency.
 
 For other modes, use the flags from `cxxFlags` in `build.zig`: `-O2 -g -fsanitize=undefined -fsanitize-trap=undefined` for ReleaseSafe, `-O3` for ReleaseFast, and `-Os` for ReleaseSmall.
 
@@ -307,21 +313,21 @@ Measured with `zig build bench -Doptimize=ReleaseFast` on Windows 11 build 26200
 
 Rendering latency:
 
-| Work | Latency | Terminal output | Allocations |
-| --- | ---: | ---: | ---: |
-| Diff two identical 12,000-cell frames | 22.9 µs | 0 bytes | 0 |
-| Present an animated frame with 3 moving cells | 81.7 µs | 38 bytes | 0 |
-| Present an unchanged frame | 88.2 µs | 0 bytes | 0 |
-| Present a full repaint | 246.3 µs | 5,012 bytes | 0 |
+| Work                                          |  Latency | Terminal output | Allocations |
+| --------------------------------------------- | -------: | --------------: | ----------: |
+| Diff two identical 12,000-cell frames         |  22.9 µs |         0 bytes |           0 |
+| Present an animated frame with 3 moving cells |  81.7 µs |        38 bytes |           0 |
+| Present an unchanged frame                    |  88.2 µs |         0 bytes |           0 |
+| Present a full repaint                        | 246.3 µs |     5,012 bytes |           0 |
 
 Parser and queue throughput:
 
-| Work | Throughput | Allocations per operation |
-| --- | ---: | ---: |
-| Decode mixed keys, mouse events, and paste | 86.3 MB/s | 0 |
-| Measure ASCII display width | 699.4 MB/s | 0 |
-| Measure mixed-script and emoji display width | 109.0 MB/s | 0 |
-| Push, drain, and dispatch event batches | 12.4 million events/s | 0 |
+| Work                                         |            Throughput | Allocations per operation |
+| -------------------------------------------- | --------------------: | ------------------------: |
+| Decode mixed keys, mouse events, and paste   |             86.3 MB/s |                         0 |
+| Measure ASCII display width                  |            699.4 MB/s |                         0 |
+| Measure mixed-script and emoji display width |            109.0 MB/s |                         0 |
+| Push, drain, and dispatch event batches      | 12.4 million events/s |                         0 |
 
 The present timings include clearing the back buffer and drawing 60 rows of text into it. The benchmark binary replaces `operator new` to count allocations. Steady-state frames allocate nothing.
 

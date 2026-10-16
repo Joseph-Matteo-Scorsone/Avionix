@@ -79,6 +79,7 @@
         "tests",
         "benchmarks",
         "examples",
+        "docs",
         "README.md",
         "AGENT.md",
     },

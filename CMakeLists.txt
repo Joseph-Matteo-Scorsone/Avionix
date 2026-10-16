@@ -17,11 +17,13 @@ set(avionix_modules
     core/entity/style.cppm
     core/entity/unicode.cppm
     core/entity/cell.cppm
+    core/entity/clipboard.cppm
     core/entity/event.cppm
     core/entity/constraint.cppm
     core/entity/error.cppm
     core/entity/markdown.cppm
     core/object/terminal_capabilities.cppm
+    core/object/clipboard.cppm
     core/object/terminal.cppm
     core/object/ansi_encoder.cppm
     core/object/buffer.cppm
@@ -43,6 +45,9 @@ set(avionix_modules
 
 add_library(avionix)
 add_library(Avionix::avionix ALIAS avionix)
+if(WIN32)
+    target_link_libraries(avionix PUBLIC user32)
+endif()
 target_compile_features(avionix PUBLIC cxx_std_26)
 target_sources(avionix
     PUBLIC
@@ -89,6 +94,7 @@ if(BUILD_TESTING)
         tests/buffer_tests.cpp
         tests/renderer_tests.cpp
         tests/input_tests.cpp
+        tests/attachment_tests.cpp
         tests/event_tests.cpp
         tests/layout_tests.cpp
         tests/widget_tests.cpp
@@ -109,7 +115,7 @@ if(BUILD_TESTING)
 endif()
 
 if(AVIONIX_BUILD_EXAMPLES)
-    foreach(example IN ITEMS hello counter dashboard markdown)
+    foreach(example IN ITEMS hello counter dashboard markdown attachments)
         add_executable(avionix-${example} examples/${example}.cpp)
         target_compile_features(avionix-${example} PRIVATE cxx_std_26)
         target_link_libraries(avionix-${example} PRIVATE avionix)

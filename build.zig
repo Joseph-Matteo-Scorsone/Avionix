@@ -41,7 +41,10 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.entity.error", .path = "core/entity/error.cppm" },
     .{ .name = "avionix.entity.markdown", .path = "core/entity/markdown.cppm", .imports = &.{"avionix.entity.unicode"} },
 
+    .{ .name = "avionix.entity.clipboard", .path = "core/entity/clipboard.cppm" },
+
     // object
+    .{ .name = "avionix.object.clipboard", .path = "core/object/clipboard.cppm", .imports = &.{"avionix.entity.clipboard"} },
     .{ .name = "avionix.object.terminal_capabilities", .path = "core/object/terminal_capabilities.cppm", .imports = &.{"avionix.entity.color"} },
     .{ .name = "avionix.object.terminal", .path = "core/object/terminal.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.error" } },
     .{ .name = "avionix.object.ansi_encoder", .path = "core/object/ansi_encoder.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style" } },
@@ -66,6 +69,7 @@ const library_modules = [_]module_spec{
 
     // public facade
     .{ .name = "avionix", .path = "lib/avionix.cppm", .imports = &.{
+        "avionix.object.clipboard",
         "avionix.entity.geometry",
         "avionix.entity.color",
         "avionix.entity.style",
@@ -113,6 +117,7 @@ const test_program: program_spec = .{
         "tests/buffer_tests.cpp",
         "tests/renderer_tests.cpp",
         "tests/input_tests.cpp",
+        "tests/attachment_tests.cpp",
         "tests/event_tests.cpp",
         "tests/layout_tests.cpp",
         "tests/widget_tests.cpp",
@@ -137,6 +142,7 @@ const example_programs = [_]program_spec{
     .{ .name = "counter", .sources = &.{"examples/counter.cpp"}, .imports = &.{"avionix"}, .description = "Run the counter example" },
     .{ .name = "dashboard", .sources = &.{"examples/dashboard.cpp"}, .imports = &.{"avionix"}, .description = "Run the dashboard example" },
     .{ .name = "markdown", .sources = &.{"examples/markdown.cpp"}, .imports = &.{"avionix"}, .description = "Run the markdown example" },
+    .{ .name = "attachments", .sources = &.{"examples/attachments.cpp"}, .imports = &.{"avionix"}, .description = "Run the attachment input example" },
 };
 
 fn layerOf(comptime name: []const u8) layer {
@@ -369,6 +375,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     for (library_modules) |spec| avionix.root_module.addObjectFile(graph.get(spec.name).object);
+    if (target.result.os.tag == .windows) avionix.root_module.linkSystemLibrary("user32", .{});
     b.installArtifact(avionix);
 
     // BMIs are installed under their module names so a consumer can use

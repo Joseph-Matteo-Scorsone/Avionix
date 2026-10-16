@@ -181,7 +181,9 @@ class application {
   void notify(user_event value) { queue_.push(event{value}); }
 
   // Called for every event after widgets had their chance, or before them
-  // when `before_widgets` is true. UI thread only.
+  // when `before_widgets` is true. UI thread only. Use the early hook to
+  // intercept paste: true consumes it, false delivers it once to the focused
+  // path. Do not manually forward an unconsumed event to the control.
   void on_event(event_hook hook, bool before_widgets = false) {
     (before_widgets ? early_hook_ : late_hook_) = std::move(hook);
   }

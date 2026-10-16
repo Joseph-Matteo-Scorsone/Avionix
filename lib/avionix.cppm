@@ -20,6 +20,7 @@ export import avionix.entity.geometry;
 export import avionix.entity.color;
 export import avionix.entity.style;
 export import avionix.entity.event;
+export import avionix.object.clipboard;
 export import avionix.entity.constraint;
 export import avionix.entity.error;
 export import avionix.entity.markdown;
