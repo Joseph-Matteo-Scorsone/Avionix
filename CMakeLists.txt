@@ -22,6 +22,7 @@ set(avionix_modules
     core/entity/constraint.cppm
     core/entity/error.cppm
     core/entity/markdown.cppm
+    core/entity/latex.cppm
     core/object/terminal_capabilities.cppm
     core/object/clipboard.cppm
     core/object/terminal.cppm

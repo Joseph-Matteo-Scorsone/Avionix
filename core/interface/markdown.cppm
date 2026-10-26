@@ -105,6 +105,9 @@ class markdown_view final : public component {
                                                   const markdown_span& span) {
     style_patch patch;
     switch (line.role) {
+      case markdown_role::math:
+        patch.foreground = colors::bright_cyan;
+        break;
       case markdown_role::heading:
         patch.add = attribute::bold;
         patch.foreground = heading_color(line.level);
@@ -123,6 +126,7 @@ class markdown_view final : public component {
       case markdown_role::body:
         break;
     }
+    if (has(span.marks, markdown_mark::math)) patch.foreground = colors::bright_cyan;
     if (has(span.marks, markdown_mark::code)) {
       patch.foreground = colors::bright_white;
       patch.background = colors::bright_black;

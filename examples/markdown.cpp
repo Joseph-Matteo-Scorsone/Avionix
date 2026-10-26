@@ -24,6 +24,14 @@ Open the [Avionix repository](https://github.com/Joseph-Matteo-Scorsone/Avionix)
 
 - headings, lists, and code
 - [x] links you can click
+
+## Automatic LaTeX math
+
+Energy is $E = mc^2$. Inline roots: \(\sqrt{x} + \alpha_i\).
+
+$$
+\frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+$$
 )"});
 
   auto& status =

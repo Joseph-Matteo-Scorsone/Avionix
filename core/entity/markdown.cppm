@@ -12,6 +12,7 @@ module;
 export module avionix.entity.markdown;
 
 import avionix.entity.unicode;
+import avionix.entity.latex;
 
 // A practical Markdown subset. Pure values: no I/O, no terminal styles.
 // layout_markdown wraps a document to a display width. The widget layer
@@ -19,7 +20,8 @@ import avionix.entity.unicode;
 //
 // Read: ATX headings, paragraphs, hard breaks, emphasis, strong text,
 // strike, inline code, fenced code, links, autolinks, images, one-level
-// quotes, unordered and ordered lists, task items, and thematic breaks.
+// quotes, unordered and ordered lists, task items, thematic breaks, and
+// delimited LaTeX math formatted as terminal text.
 //
 // Not read: HTML, tables, reference links, setext headings, indented code
 // blocks, and nested quotes. Markers follow a short set of rules rather
@@ -33,6 +35,7 @@ enum class markdown_mark : std::uint8_t {
   emphasis = 1U << 1U,
   code = 1U << 2U,
   strike = 1U << 3U,
+  math = 1U << 4U,
 };
 
 [[nodiscard]] constexpr markdown_mark operator|(markdown_mark a,
@@ -63,7 +66,15 @@ struct markdown_span {
 };
 
 struct markdown_block {
-  enum class kind : std::uint8_t { paragraph, heading, code, quote, list_item, rule };
+  enum class kind : std::uint8_t {
+    paragraph,
+    heading,
+    code,
+    quote,
+    list_item,
+    rule,
+    math
+  };
 
   kind type{kind::paragraph};
   std::uint8_t level{};
@@ -79,7 +90,7 @@ struct markdown_document {
   std::vector<markdown_block> blocks{};
 };
 
-enum class markdown_role : std::uint8_t { body, heading, code, quote, rule };
+enum class markdown_role : std::uint8_t { body, heading, code, quote, rule, math };
 
 // One visual row. Spans are already wrapped to the layout width.
 struct markdown_line {
@@ -109,6 +120,48 @@ using avionix::next_grapheme_boundary;
 
 [[nodiscard]] bool is_space(char c) noexcept { return c == ' ' || c == '\t'; }
 
+struct math_match {
+  std::size_t end{};
+  std::string text;
+};
+
+[[nodiscard]] std::optional<math_match> inline_math(std::string_view text) {
+  std::string_view open, close;
+  if (text.starts_with("\\(")) {
+    open = "\\(";
+    close = "\\)";
+  } else if (text.starts_with("\\[")) {
+    open = "\\[";
+    close = "\\]";
+  } else if (text.starts_with("$$")) {
+    open = "$$";
+    close = "$$";
+  } else if (text.starts_with('$')) {
+    open = "$";
+    close = "$";
+  } else
+    return std::nullopt;
+  if (text.size() <= open.size() || text[open.size()] == ' ' ||
+      text[open.size()] == '\t')
+    return std::nullopt;
+  for (auto i = open.size(); i < text.size(); ++i) {
+    if (text.substr(i).starts_with(close)) {
+      if (i == open.size() || text[i - 1] == ' ' || text[i - 1] == '\t') continue;
+      const auto end = i + close.size();
+      if (close == "$" &&
+          ((end < text.size() && text[end] >= '0' && text[end] <= '9') ||
+           (end < text.size() && text[end] == '$')))
+        continue;
+      auto formatted = avionix::format_latex(text.substr(open.size(), i - open.size()));
+      return math_match{
+          end, formatted ? std::move(*formatted) : std::string{text.substr(0, end)}};
+    }
+    if (text[i] == '\\' && i + 1 < text.size()) ++i;
+    if (i > 65536) break;
+  }
+  return std::nullopt;
+}
+
 [[nodiscard]] bool is_punct(unsigned char c) noexcept { return std::ispunct(c) != 0; }
 
 [[nodiscard]] bool is_blank(std::string_view line) noexcept {
@@ -119,6 +172,56 @@ using avionix::next_grapheme_boundary;
   while (!text.empty() && is_space(text.front())) text.remove_prefix(1);
   while (!text.empty() && is_space(text.back())) text.remove_suffix(1);
   return text;
+}
+
+struct math_block_match {
+  std::size_t next{};
+  std::string text;
+};
+
+[[nodiscard]] std::optional<math_block_match> block_math(
+    const std::vector<std::string_view>& lines, std::size_t start) {
+  auto first = trim(lines[start]);
+  std::string_view open, close;
+  if (first.starts_with("$$")) {
+    open = "$$";
+    close = "$$";
+  } else if (first.starts_with("\\[")) {
+    open = "\\[";
+    close = "\\]";
+  } else
+    return std::nullopt;
+  std::string body;
+  for (auto i = start; i < lines.size(); ++i) {
+    auto line = i == start ? first.substr(open.size()) : lines[i];
+    std::size_t end = std::string_view::npos;
+    for (std::size_t j = 0; j < line.size(); ++j) {
+      if (line.substr(j).starts_with(close)) {
+        end = j;
+        break;
+      }
+      if (line[j] == '\\' && j + 1 < line.size()) ++j;
+    }
+    if (end != std::string_view::npos) {
+      if (!trim(line.substr(end + close.size())).empty()) return std::nullopt;
+      body += line.substr(0, end);
+      if (body.size() > 65536) return std::nullopt;
+      auto formatted = avionix::format_latex(trim(body));
+      if (!formatted) {
+        std::string raw;
+        for (auto j = start; j <= i; ++j) {
+          if (j != start) raw += '\n';
+          raw += lines[j];
+        }
+        return math_block_match{i + 1, std::move(raw)};
+      }
+      return math_block_match{i + 1, std::move(*formatted)};
+    }
+    body += line;
+    body += ' ';
+    if (body.size() > 65536) return std::nullopt;
+  }
+  return std::nullopt;
 }
 
 [[nodiscard]] std::vector<std::string_view> split_lines(std::string_view source) {
@@ -465,6 +568,14 @@ std::vector<markdown_span> parse_inlines(std::string_view text, markdown_mark ba
     literal.clear();
   };
   for (std::size_t i = 0; i < text.size();) {
+    if (text[i] == '$' || text[i] == '\\') {
+      if (auto math = inline_math(text.substr(i))) {
+        flush();
+        out.push_back({std::move(math->text), base | markdown_mark::math, {}});
+        i += math->end;
+        continue;
+      }
+    }
     if (text[i] == '\\' && i + 1 < text.size() &&
         is_punct(static_cast<unsigned char>(text[i + 1]))) {
       literal.push_back(text[i + 1]);
@@ -713,6 +824,18 @@ markdown_document parse_markdown(std::string_view source) {
       document.blocks.push_back(std::move(block));
       continue;
     }
+    if (auto math = block_math(lines, i)) {
+      markdown_block block;
+      block.type = markdown_block::kind::math;
+      const auto rows = split_lines(math->text);
+      for (std::size_t row = 0; row < rows.size(); ++row) {
+        if (row != 0) block.spans.push_back({"\n", markdown_mark::none, {}});
+        block.spans.push_back({std::string{rows[row]}, markdown_mark::math, {}});
+      }
+      i = math->next;
+      document.blocks.push_back(std::move(block));
+      continue;
+    }
     if (const auto heading = match_heading(lines[i])) {
       markdown_block block;
       block.type = markdown_block::kind::heading;
@@ -761,6 +884,7 @@ markdown_document parse_markdown(std::string_view source) {
     }
     std::vector<std::string_view> paragraph;
     while (i < lines.size() && !is_blank(lines[i]) && !starts_block(lines[i])) {
+      if (!paragraph.empty() && block_math(lines, i)) break;
       paragraph.push_back(lines[i]);
       ++i;
     }
@@ -784,6 +908,9 @@ std::vector<markdown_line> layout_markdown(const markdown_document& document,
     if (!lines.empty() && !tight)
       lines.push_back(markdown_line{markdown_role::body, 0, {}});
     switch (block.type) {
+      case markdown_block::kind::math:
+        layout_flow(lines, markdown_role::math, 0, block.spans, width, 0, 0);
+        break;
       case markdown_block::kind::rule: {
         std::string bar;
         bar.reserve(static_cast<std::size_t>(width) * 3U);

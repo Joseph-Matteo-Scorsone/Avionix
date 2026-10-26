@@ -1,5 +1,8 @@
 # Avionix
 
+Markdown views automatically format delimited LaTeX math. See
+[terminal math support](docs/latex.md) and `zig build run-markdown`.
+
 For paste interception, native-drop limitations, and explicit clipboard images,
 see [attachment input](docs/attachment-input.md) and `examples/attachments.cpp`.
 
@@ -28,7 +31,7 @@ Nothing else is installed or vendored. `libs/` exists for future vendored depend
 | Command                                  | What it does                                                                                           |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `zig build`                              | Builds `libavionix` and installs it with the module BMIs into `zig-out/`                               |
-| `zig build test`                         | Runs the unit tests (230 tests, no terminal needed)                                                    |
+| `zig build test`                         | Runs the unit tests (234 tests, no terminal needed)                                                    |
 | `zig build smoke`                        | Runs each example under a pseudo terminal, resizes it, sends its quit key, and checks for a clean exit |
 | `zig build bench -Doptimize=ReleaseFast` | Runs the hot-path benchmarks                                                                           |
 | `zig build examples`                     | Builds `hello`, `counter`, `dashboard`, `markdown`, and `attachments` into `zig-out/bin`               |

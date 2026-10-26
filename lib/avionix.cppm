@@ -24,6 +24,7 @@ export import avionix.object.clipboard;
 export import avionix.entity.constraint;
 export import avionix.entity.error;
 export import avionix.entity.markdown;
+export import avionix.entity.latex;
 
 export import avionix.interface.widget;
 export import avionix.interface.layout;

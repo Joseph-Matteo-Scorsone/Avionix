@@ -36,6 +36,63 @@ event pointer(mouse_action action, position where) {
 const avionix_tests::suite markdown{
     "markdown",
     {
+        {"latex_inline_detection",
+         [] {
+           const auto doc = parse_markdown(
+               R"(Energy $E=mc^2$, \(\alpha_i \leq \sqrt{x}\), and $\frac{a}{b}$.)");
+           check(joined(doc.blocks[0].spans) ==
+                 "Energy E=mc², αᵢ ≤ √(x), and (a)/(b).");
+           check(span_with(doc.blocks[0].spans, markdown_mark::math) != nullptr);
+           check(format_latex(R"(x^{12}+y_{ab})") == "x¹²+y_(ab)");
+           check(format_latex(R"(\text{hello_world} + \pi)") == "hello_world + π");
+         }},
+        {"latex_display_and_wrapping",
+         [] {
+           const auto doc = parse_markdown(
+               "Before\n$$\n\\frac{1}{2} + \\beta\n$$\nAfter\n\n\\[x^2\\]");
+           check_equal(doc.blocks.size(), std::size_t{4});
+           check(doc.blocks[1].type == markdown_block::kind::math);
+           check(doc.blocks[3].type == markdown_block::kind::math);
+           const auto lines = layout_markdown(doc, 8);
+           bool saw_math = false;
+           for (const auto& line : lines) {
+             check(display_width(line_text(line)) <= 8);
+             saw_math = saw_math || line.role == markdown_role::math;
+           }
+           check(saw_math);
+           check(layout_markdown(doc, 0).empty());
+         }},
+        {"latex_code_currency_and_fallback",
+         [] {
+           auto doc = parse_markdown(R"(`$x^2$` costs $5 and $10. Escaped \$x\$.)");
+           check(joined(doc.blocks[0].spans) == "$x^2$ costs $5 and $10. Escaped $x$.");
+           check(span_with(doc.blocks[0].spans, markdown_mark::math) == nullptr);
+           doc = parse_markdown("```latex\n$x^2$\n```\n");
+           check(joined(doc.blocks[0].spans) == "$x^2$");
+           doc = parse_markdown(R"(Unknown $\unknown{x_1}$ and incomplete $x^{2$.)");
+           check(joined(doc.blocks[0].spans) ==
+                 R"(Unknown $\unknown{x_1}$ and incomplete $x^{2$.)");
+           check(!format_latex(R"(\frac{1})"));
+           check(!format_latex(R"(\sqrt[3]{x})"));
+           check(!format_latex(std::string(65537, 'x')));
+           check(!format_latex(std::string(100, '{') + "x" + std::string(100, '}')));
+           doc = parse_markdown("$$\n\\unknown{x}\n$$");
+           check(joined(doc.blocks[0].spans) == "$$\n\\unknown{x}\n$$");
+         }},
+        {"latex_widget_rendering",
+         [] {
+           markdown_view view{R"(Inline $x^2 + \alpha$.)"};
+           const auto buffer = application::render_to_buffer(view, {40, 3});
+           check(buffer.find("x² + α").has_value());
+           check(view.source() == R"(Inline $x^2 + \alpha$.)");
+           view.set_source("$x^2$");
+           (void)application::render_to_buffer(view, {20, 3});
+           application app;
+           app.simulate(view, pointer(mouse_action::press, {0, 0}));
+           app.simulate(view, pointer(mouse_action::drag, {1, 0}));
+           app.simulate(view, pointer(mouse_action::release, {1, 0}));
+           check(app.last_copied() == "x²");
+         }},
         {"headings_breaks_and_rules",
          [] {
            const auto doc =

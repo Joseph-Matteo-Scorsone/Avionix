@@ -39,7 +39,8 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.entity.event", .path = "core/entity/event.cppm", .imports = &.{"avionix.entity.geometry"} },
     .{ .name = "avionix.entity.constraint", .path = "core/entity/constraint.cppm", .imports = &.{"avionix.entity.geometry"} },
     .{ .name = "avionix.entity.error", .path = "core/entity/error.cppm" },
-    .{ .name = "avionix.entity.markdown", .path = "core/entity/markdown.cppm", .imports = &.{"avionix.entity.unicode"} },
+    .{ .name = "avionix.entity.latex", .path = "core/entity/latex.cppm" },
+    .{ .name = "avionix.entity.markdown", .path = "core/entity/markdown.cppm", .imports = &.{ "avionix.entity.unicode", "avionix.entity.latex" } },
 
     .{ .name = "avionix.entity.clipboard", .path = "core/entity/clipboard.cppm" },
 
@@ -78,6 +79,7 @@ const library_modules = [_]module_spec{
         "avionix.entity.constraint",
         "avionix.entity.error",
         "avionix.entity.markdown",
+        "avionix.entity.latex",
         "avionix.entity.cell",
         "avionix.object.buffer",
         "avionix.interface.widget",
@@ -171,7 +173,7 @@ comptime {
         for (spec.imports) |import_name| {
             const dep = findSpec(library_modules[0..index], import_name) orelse
                 @compileError(spec.name ++ " imports " ++ import_name ++ ", which is not declared before it");
-            if (@intFromEnum(layerOf(dep.name)) > @intFromEnum(own))
+            if (@backingInt(layerOf(dep.name)) > @backingInt(own))
                 @compileError("dependency direction violated: " ++ spec.name ++ " -> " ++ import_name);
         }
         if (own != .lib) {
