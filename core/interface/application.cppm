@@ -26,6 +26,7 @@ import avionix.entity.event;
 import avionix.entity.error;
 import avionix.object.buffer;
 import avionix.object.event_queue;
+import avionix.object.renderer;
 import avionix.task.run;
 import avionix.interface.widget;
 
@@ -68,6 +69,9 @@ struct application_options {
   std::size_t max_pending_input_events{4096};
   // Overrides the detected color depth.
   std::optional<color_depth> colors{};
+  // Overrides image detection: kitty, sixel, iterm2, or none for
+  // half-block images. $AVIONIX_GRAPHICS does the same without code.
+  std::optional<graphics_protocol> graphics{};
 };
 
 // Explicit cancellation. Destroying a handle does not cancel the interval.
@@ -119,6 +123,7 @@ class application {
     opts.input.max_paste_bytes = options_.max_paste_bytes;
     opts.input.max_pending_events = options_.max_pending_input_events;
     opts.colors = options_.colors;
+    opts.graphics = options_.graphics;
 
     driver d{*this};
     auto result = avionix::run(queue_, d, opts);
@@ -180,6 +185,13 @@ class application {
   // Delivers a user_event through the normal event path. Thread safe.
   void notify(user_event value) { queue_.push(event{value}); }
 
+  // Lets a UI-thread event source with its own blocking wait (the 3D
+  // viewport window) share the event loop: while installed, the loop waits
+  // inside `loop` instead of on the queue, and every post, notify, and
+  // terminal input wakes it. Pass nullptr to remove it. `loop` must stay
+  // alive until removed. Thread safe.
+  void set_native_loop(native_loop* loop) { queue_.set_native_loop(loop); }
+
   // Called for every event after widgets had their chance, or before them
   // when `before_widgets` is true. UI thread only. Use the early hook to
   // intercept paste: true consumes it, false delivers it once to the focused
@@ -193,6 +205,10 @@ class application {
   void request_redraw() noexcept { dirty_ = true; }
 
   [[nodiscard]] size screen_size() const noexcept { return screen_size_; }
+
+  // Image support the terminal reported, for status displays. Widgets read
+  // it from render_context::graphics() instead.
+  [[nodiscard]] const graphics_support& graphics() const noexcept { return graphics_; }
 
   // Moves focus to `target`, which must be focusable and part of the
   // running tree.
@@ -267,10 +283,19 @@ class application {
     [[nodiscard]] std::string take_output() {
       return std::exchange(app.pending_output_, {});
     }
+    void set_graphics(const graphics_support& support) {
+      if (app.graphics_ == support) return;
+      app.graphics_ = support;
+      app.dirty_ = true;
+    }
+    [[nodiscard]] std::vector<graphics_placement> take_graphics() {
+      return std::exchange(app.frame_.placements, {});
+    }
   };
 
   void draw(render_buffer& back) {
     frame_ = {};
+    frame_.graphics = graphics_;
     if (root_ != nullptr) {
       render_context context{back, back.area(), frame_};
       root_->render_in(context);
@@ -580,6 +605,7 @@ class application {
   event_hook early_hook_{};
   event_hook late_hook_{};
   size screen_size_{};
+  graphics_support graphics_{};
   render_buffer rendered_{};
   position selection_anchor_{};
   position selection_active_{};

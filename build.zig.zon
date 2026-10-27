@@ -76,6 +76,8 @@
         "CMakeLists.txt",
         "core",
         "lib",
+        "libs",
+        "assets",
         "tests",
         "benchmarks",
         "examples",

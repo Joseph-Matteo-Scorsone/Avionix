@@ -6,6 +6,16 @@ Markdown views automatically format delimited LaTeX math. See
 For paste interception, native-drop limitations, and explicit clipboard images,
 see [attachment input](docs/attachment-input.md) and `examples/attachments.cpp`.
 
+For an interactive 3D view next to the terminal UI (tessellated scenes,
+orbit and pan, picking with host face and edge ids, move/rotate/scale
+handles that emit typed intents, exploded views, and revision-tagged
+captures), see [3D viewport](docs/viewport.md), `examples/viewport.cpp`,
+and `zig build run-viewport`. The viewport can be a section of the TUI
+(`viewport_panel`): Kitty graphics, Sixel, or iTerm2 images where the terminal
+supports them, half-block characters everywhere else, on Windows, macOS, and
+Linux. `image_view` shows any RGBA image the same way, `backdrop` puts a
+wallpaper behind the UI, and `load_image` reads PNG and JPEG files.
+
 Avionix is a terminal user interface library written in C++26 with C++ modules. It owns terminal setup and restoration, input decoding, layout, a double-buffered diff renderer, widgets, and the event loop. It has no runtime dependencies beyond the C++ standard library and the platform APIs.
 
 ```cpp
@@ -24,18 +34,21 @@ int main() {
 - Zig 0.17.0-dev.813 or a compatible build (`minimum_zig_version` in `build.zig.zon`). Zig's bundled Clang 22 and libc++ compile everything.
 - Windows 10 1809 or later (virtual terminal processing and ConPTY), Linux, or macOS.
 
-Nothing else is installed or vendored. `libs/` exists for future vendored dependencies and is empty.
+The terminal library has no other dependencies. The optional 3D viewport (`import avionix.viewport;`, library `avionix_viewport`) compiles the vendored GLFW 3.4 in `libs/glfw` and uses the system OpenGL 3.3 driver; `-Dviewport=false` skips it. See [3D viewport](docs/viewport.md) for platforms and requirements.
 
 ## Build commands
 
 | Command                                  | What it does                                                                                           |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | `zig build`                              | Builds `libavionix` and installs it with the module BMIs into `zig-out/`                               |
-| `zig build test`                         | Runs the unit tests (234 tests, no terminal needed)                                                    |
+| `zig build test`                         | Runs the unit tests (303 with the viewport, 251 without; no terminal needed)                           |
 | `zig build smoke`                        | Runs each example under a pseudo terminal, resizes it, sends its quit key, and checks for a clean exit |
 | `zig build bench -Doptimize=ReleaseFast` | Runs the hot-path benchmarks                                                                           |
-| `zig build examples`                     | Builds `hello`, `counter`, `dashboard`, `markdown`, and `attachments` into `zig-out/bin`               |
+| `zig build examples`                     | Builds `hello`, `counter`, `dashboard`, `markdown`, `attachments`, and `viewport` into `zig-out/bin`   |
 | `zig build run-dashboard`                | Runs one example in the current terminal                                                               |
+| `zig build run-viewport`                 | Runs the CAD workspace example: 3D viewport inside the TUI (`-- --window` adds the companion window)   |
+| `zig build run-background`               | Runs the wallpaper with overlaid text and a draggable brightness slider                                |
+| `zig build viewport-check`               | Drives the viewport example's real window through a scripted check (needs a display and OpenGL 3.3)    |
 
 Useful options: `-Dtarget=x86_64-linux-gnu` or `-Dtarget=aarch64-macos` to cross-compile, `-Doptimize=Debug|ReleaseSafe|ReleaseFast|ReleaseSmall`, and `-Dwerror=false` to keep warnings from failing the build. Arguments after `--` go to the program, for example `zig build test -- unicode` runs the tests whose name contains `unicode`.
 
@@ -54,12 +67,13 @@ On Windows, replace `clang++` with the full path to `clang++.exe` when it is not
 
 Build options:
 
-| Option                       | Default | Effect                                                 |
-| ---------------------------- | ------- | ------------------------------------------------------ |
-| `BUILD_TESTING`              | `ON`    | Builds `avionix-tests` and the PTY smoke harness       |
-| `AVIONIX_BUILD_EXAMPLES`     | `ON`    | Builds `hello`, `counter`, `dashboard`, and `markdown` |
-| `AVIONIX_BUILD_BENCHMARKS`   | `OFF`   | Builds `avionix-benchmarks`                            |
-| `AVIONIX_WARNINGS_AS_ERRORS` | `ON`    | Promotes Avionix compiler warnings to errors           |
+| Option                       | Default | Effect                                                                              |
+| ---------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `BUILD_TESTING`              | `ON`    | Builds `avionix-tests` and the PTY smoke harness                                    |
+| `AVIONIX_BUILD_EXAMPLES`     | `ON`    | Builds `hello`, `counter`, `dashboard`, and `markdown`                              |
+| `AVIONIX_BUILD_BENCHMARKS`   | `OFF`   | Builds `avionix-benchmarks`                                                         |
+| `AVIONIX_WARNINGS_AS_ERRORS` | `ON`    | Promotes Avionix compiler warnings to errors                                        |
+| `AVIONIX_BUILD_VIEWPORT`     | `ON`    | Builds `avionix_viewport` (GLFW, OpenGL 3.3), its tests, and the `viewport` example |
 
 Configure a release benchmark build and install the library:
 
@@ -355,7 +369,7 @@ lib/             the `avionix` facade
 tests/           unit tests, the test harness module, and the PTY smoke harness
 benchmarks/      hot-path benchmarks
 examples/        programs that use only `import avionix;`
-libs/            vendored dependencies (none)
+libs/            vendored dependencies: glfw (3D viewport only), stb_image (PNG/JPEG decoding)
 ```
 
 ### Visibility, interaction, and animation
@@ -387,3 +401,5 @@ Screen-level drags, on widgets that do not capture the pointer, highlight cells 
 `text_area` edits UTF-8 text across multiple lines. Shift+Enter inserts a newline; Enter calls `on_submit`. Pasted text preserves newlines and removes terminal controls. Left, Right, Backspace, Delete, Home, and End edit at grapheme boundaries. Up/Down moves the cursor between visual lines. `set_history` changes Up/Down to history navigation and preserves the draft. `on_change` observes edits. `block::set_focus_title_style` supplies a title patch while a descendant is focused.
 
 `render_buffer::rows()` returns UTF-8 row strings, skipping continuation cells and preserving trailing spaces. `find(text)` returns the first matching terminal position or `std::nullopt`, including correct columns after wide glyphs. `cell::link()` is 0 for ordinary text. Any other value is an id into that buffer's link table, and `link_target(id)` returns the URL. `clear` and `resize` drop the table. These methods own their results and perform no terminal I/O.
+
+The three graphics demos are `zig build run-viewport` (3D viewport), `zig build run-background` (background image), and `zig build run-viewport_background` (background image plus 3D viewport). In `run-background`, click or drag the brightness slider to adjust it from 0?100%. In `run-viewport_background`, press `d` to toggle dimmed/full brightness. Both demos use `b` to toggle the image and `q` to quit.

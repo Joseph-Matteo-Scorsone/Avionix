@@ -1,5 +1,7 @@
 module;
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <variant>
@@ -157,8 +159,22 @@ struct user_event {
                                    const user_event&) noexcept = default;
 };
 
+// A terminal's answer to a query the event loop sent: primary device
+// attributes (CSI ? ... c) or cell and text-area pixel sizes (CSI 6/4 ; h ;
+// w t). The event loop consumes these to decide how to show images;
+// applications and widgets never receive them.
+struct terminal_reply {
+  enum class kind : std::uint8_t { device_attributes, cell_size, text_area_size };
+  kind what{};
+  std::array<std::uint32_t, 16> values{};
+  std::size_t count{};
+
+  friend constexpr bool operator==(const terminal_reply&,
+                                   const terminal_reply&) noexcept = default;
+};
+
 using event = std::variant<key_event, mouse_event, paste_event, resize_event,
-                           focus_event, user_event, file_drop_event>;
+                           focus_event, user_event, file_drop_event, terminal_reply>;
 
 // The alternative held by `value`, or nullptr. Lets consumers inspect events
 // without including <variant>; std::visit remains available for exhaustive

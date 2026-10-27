@@ -27,6 +27,11 @@ const module_spec = struct {
     name: []const u8,
     path: []const u8,
     imports: []const []const u8 = &.{},
+    // Adds the vendored GLFW headers to the system include path. Only the
+    // window adapter includes them.
+    glfw_headers: bool = false,
+    // Adds the vendored stb_image header. Only image_file includes it.
+    stb_headers: bool = false,
 };
 
 const library_modules = [_]module_spec{
@@ -43,14 +48,17 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.entity.markdown", .path = "core/entity/markdown.cppm", .imports = &.{ "avionix.entity.unicode", "avionix.entity.latex" } },
 
     .{ .name = "avionix.entity.clipboard", .path = "core/entity/clipboard.cppm" },
+    .{ .name = "avionix.entity.image", .path = "core/entity/image.cppm" },
+    .{ .name = "avionix.entity.terminal_graphics", .path = "core/entity/terminal_graphics.cppm", .imports = &.{ "avionix.entity.image", "avionix.entity.color" } },
 
     // object
+    .{ .name = "avionix.object.image_file", .path = "core/object/image_file.cppm", .imports = &.{ "avionix.entity.image", "avionix.entity.error" }, .stb_headers = true },
     .{ .name = "avionix.object.clipboard", .path = "core/object/clipboard.cppm", .imports = &.{"avionix.entity.clipboard"} },
-    .{ .name = "avionix.object.terminal_capabilities", .path = "core/object/terminal_capabilities.cppm", .imports = &.{"avionix.entity.color"} },
-    .{ .name = "avionix.object.terminal", .path = "core/object/terminal.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.error" } },
+    .{ .name = "avionix.object.terminal_capabilities", .path = "core/object/terminal_capabilities.cppm", .imports = &.{ "avionix.entity.color", "avionix.entity.terminal_graphics" } },
+    .{ .name = "avionix.object.terminal", .path = "core/object/terminal.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.error", "avionix.entity.terminal_graphics" } },
     .{ .name = "avionix.object.ansi_encoder", .path = "core/object/ansi_encoder.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style" } },
     .{ .name = "avionix.object.buffer", .path = "core/object/buffer.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.cell" } },
-    .{ .name = "avionix.object.renderer", .path = "core/object/renderer.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.cell", "avionix.object.buffer", "avionix.object.ansi_encoder" } },
+    .{ .name = "avionix.object.renderer", .path = "core/object/renderer.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.cell", "avionix.entity.terminal_graphics", "avionix.object.buffer", "avionix.object.ansi_encoder" } },
     .{ .name = "avionix.object.input_decoder", .path = "core/object/input_decoder.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.unicode", "avionix.entity.event" } },
     .{ .name = "avionix.object.event_queue", .path = "core/object/event_queue.cppm", .imports = &.{"avionix.entity.event"} },
     .{ .name = "avionix.object.input_reader", .path = "core/object/input_reader.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.event", "avionix.entity.error", "avionix.object.terminal", "avionix.object.input_decoder", "avionix.object.event_queue" } },
@@ -59,14 +67,15 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.task.dispatch", .path = "core/task/dispatch.cppm", .imports = &.{ "avionix.entity.event", "avionix.object.event_queue" } },
     .{ .name = "avionix.task.render", .path = "core/task/render.cppm", .imports = &.{ "avionix.entity.error", "avionix.object.buffer", "avionix.object.renderer" } },
     .{ .name = "avionix.task.resize", .path = "core/task/resize.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.object.renderer" } },
-    .{ .name = "avionix.task.run", .path = "core/task/run.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.event", "avionix.entity.error", "avionix.object.terminal", "avionix.object.terminal_capabilities", "avionix.object.buffer", "avionix.object.renderer", "avionix.object.event_queue", "avionix.object.input_reader", "avionix.task.dispatch", "avionix.task.render", "avionix.task.resize" } },
+    .{ .name = "avionix.task.run", .path = "core/task/run.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.event", "avionix.entity.error", "avionix.entity.terminal_graphics", "avionix.object.terminal", "avionix.object.terminal_capabilities", "avionix.object.buffer", "avionix.object.renderer", "avionix.object.event_queue", "avionix.object.input_reader", "avionix.task.dispatch", "avionix.task.render", "avionix.task.resize" } },
 
     // interface
-    .{ .name = "avionix.interface.widget", .path = "core/interface/widget.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.cell", "avionix.entity.event", "avionix.object.buffer" } },
+    .{ .name = "avionix.interface.widget", .path = "core/interface/widget.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.cell", "avionix.entity.event", "avionix.entity.terminal_graphics", "avionix.object.buffer", "avionix.object.renderer" } },
     .{ .name = "avionix.interface.layout", .path = "core/interface/layout.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.event", "avionix.entity.constraint", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.controls", .path = "core/interface/controls.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.event", "avionix.interface.widget" } },
+    .{ .name = "avionix.interface.image", .path = "core/interface/image.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.terminal_graphics", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.markdown", .path = "core/interface/markdown.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.markdown", "avionix.interface.widget", "avionix.interface.controls" } },
-    .{ .name = "avionix.interface.application", .path = "core/interface/application.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.cell", "avionix.entity.event", "avionix.entity.error", "avionix.object.buffer", "avionix.object.event_queue", "avionix.task.run", "avionix.interface.widget" } },
+    .{ .name = "avionix.interface.application", .path = "core/interface/application.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.cell", "avionix.entity.event", "avionix.entity.error", "avionix.object.buffer", "avionix.object.event_queue", "avionix.object.renderer", "avionix.task.run", "avionix.interface.widget" } },
 
     // public facade
     .{ .name = "avionix", .path = "lib/avionix.cppm", .imports = &.{
@@ -81,13 +90,76 @@ const library_modules = [_]module_spec{
         "avionix.entity.markdown",
         "avionix.entity.latex",
         "avionix.entity.cell",
+        "avionix.entity.image",
+        "avionix.entity.terminal_graphics",
+        "avionix.object.image_file",
         "avionix.object.buffer",
         "avionix.interface.widget",
         "avionix.interface.layout",
         "avionix.interface.controls",
         "avionix.interface.markdown",
+        "avionix.interface.image",
         "avionix.interface.application",
     } },
+};
+
+// The optional 3D viewport. These modules are compiled into the separate
+// `avionix_viewport` library together with the vendored GLFW sources, so
+// terminal-only consumers never link a windowing library or OpenGL. They
+// follow the same layering rules and may import any library module above.
+const viewport_modules = [_]module_spec{
+    .{ .name = "avionix.entity.spatial", .path = "core/entity/spatial.cppm" },
+    .{ .name = "avionix.entity.scene", .path = "core/entity/scene.cppm", .imports = &.{ "avionix.entity.spatial", "avionix.entity.error" } },
+    .{ .name = "avionix.entity.camera", .path = "core/entity/camera.cppm", .imports = &.{ "avionix.entity.spatial", "avionix.entity.image" } },
+    .{ .name = "avionix.entity.picking", .path = "core/entity/picking.cppm", .imports = &.{ "avionix.entity.scene", "avionix.entity.camera" } },
+    .{ .name = "avionix.entity.manipulator", .path = "core/entity/manipulator.cppm", .imports = &.{ "avionix.entity.scene", "avionix.entity.camera" } },
+    .{ .name = "avionix.entity.viewport", .path = "core/entity/viewport.cppm", .imports = &.{ "avionix.entity.spatial", "avionix.entity.scene", "avionix.entity.camera", "avionix.entity.picking", "avionix.entity.manipulator", "avionix.entity.image", "avionix.entity.event", "avionix.entity.error" } },
+    .{ .name = "avionix.object.scene_store", .path = "core/object/scene_store.cppm", .imports = &.{ "avionix.entity.spatial", "avionix.entity.scene", "avionix.entity.error" } },
+    .{ .name = "avionix.object.gl", .path = "core/object/gl.cppm", .imports = &.{"avionix.entity.error"} },
+    .{ .name = "avionix.object.native_window", .path = "core/object/native_window.cppm", .imports = &.{ "avionix.entity.viewport", "avionix.entity.error", "avionix.object.gl" }, .glfw_headers = true },
+    .{ .name = "avionix.object.scene_renderer", .path = "core/object/scene_renderer.cppm", .imports = &.{ "avionix.entity.viewport", "avionix.entity.error", "avionix.object.gl", "avionix.object.scene_store" } },
+    .{ .name = "avionix.object.software_renderer", .path = "core/object/software_renderer.cppm", .imports = &.{ "avionix.entity.viewport", "avionix.object.scene_store", "avionix.object.scene_renderer" } },
+    .{ .name = "avionix.interface.viewport", .path = "core/interface/viewport.cppm", .imports = &.{ "avionix.entity.viewport", "avionix.entity.error", "avionix.object.event_queue", "avionix.object.scene_store", "avionix.object.native_window", "avionix.object.scene_renderer", "avionix.object.software_renderer", "avionix.interface.application" } },
+    .{ .name = "avionix.interface.viewport_panel", .path = "core/interface/viewport_panel.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.event", "avionix.entity.terminal_graphics", "avionix.entity.viewport", "avionix.interface.widget", "avionix.interface.image", "avionix.interface.viewport" } },
+
+    // public facade for the viewport
+    .{ .name = "avionix.viewport", .path = "lib/viewport.cppm", .imports = &.{
+        "avionix.entity.spatial",
+        "avionix.entity.scene",
+        "avionix.entity.camera",
+        "avionix.entity.picking",
+        "avionix.entity.manipulator",
+        "avionix.entity.image",
+        "avionix.entity.viewport",
+        "avionix.object.scene_store",
+        "avionix.interface.viewport",
+        "avionix.interface.viewport_panel",
+    } },
+};
+
+const all_modules = library_modules ++ viewport_modules;
+
+// GLFW 3.4 sources per platform (libs/glfw/VENDORED.md). Each platform
+// compiles only its own backend. Linux uses X11; Wayland sessions run it
+// through XWayland.
+const glfw_common = [_][]const u8{
+    "context.c",        "init.c",      "input.c",        "monitor.c",
+    "platform.c",       "vulkan.c",    "window.c",       "egl_context.c",
+    "osmesa_context.c", "null_init.c", "null_monitor.c", "null_window.c",
+    "null_joystick.c",
+};
+const glfw_windows = [_][]const u8{
+    "win32_init.c", "win32_joystick.c", "win32_module.c", "win32_monitor.c",
+    "win32_time.c", "win32_thread.c",   "win32_window.c", "wgl_context.c",
+};
+const glfw_linux = [_][]const u8{
+    "posix_module.c", "posix_time.c",     "posix_thread.c", "posix_poll.c",
+    "x11_init.c",     "x11_monitor.c",    "x11_window.c",   "xkb_unicode.c",
+    "glx_context.c",  "linux_joystick.c",
+};
+const glfw_macos = [_][]const u8{
+    "cocoa_init.m",   "cocoa_joystick.m", "cocoa_monitor.m", "cocoa_window.m",
+    "nsgl_context.m", "cocoa_time.c",     "posix_module.c",  "posix_thread.c",
 };
 
 // Test support modules may import internal modules. They are never linked
@@ -101,12 +173,20 @@ const program_spec = struct {
     sources: []const []const u8,
     imports: []const []const u8,
     description: []const u8,
+    // Links avionix_viewport, and through it GLFW and the platform window
+    // libraries.
+    viewport: bool = false,
 };
 
 // Tests and benchmarks exercise internal modules directly.
 const all_internal = blk: {
     var names: [library_modules.len][]const u8 = undefined;
     for (library_modules, 0..) |spec, i| names[i] = spec.name;
+    break :blk names;
+};
+const all_internal_viewport = blk: {
+    var names: [all_modules.len][]const u8 = undefined;
+    for (all_modules, 0..) |spec, i| names[i] = spec.name;
     break :blk names;
 };
 
@@ -126,9 +206,19 @@ const test_program: program_spec = .{
         "tests/feature_tests.cpp",
         "tests/markdown_tests.cpp",
         "tests/terminal_tests.cpp",
+        "tests/graphics_tests.cpp",
     },
     .imports = &(all_internal ++ [_][]const u8{"avionix_tests.check"}),
     .description = "Run the Avionix test suite",
+};
+
+// The same suite plus the viewport tests, used when the viewport is built.
+const test_program_viewport: program_spec = .{
+    .name = test_program.name,
+    .sources = test_program.sources ++ &[_][]const u8{"tests/viewport_tests.cpp"},
+    .imports = &(all_internal_viewport ++ [_][]const u8{"avionix_tests.check"}),
+    .description = test_program.description,
+    .viewport = true,
 };
 
 const benchmark_program: program_spec = .{
@@ -144,11 +234,29 @@ const example_programs = [_]program_spec{
     .{ .name = "counter", .sources = &.{"examples/counter.cpp"}, .imports = &.{"avionix"}, .description = "Run the counter example" },
     .{ .name = "dashboard", .sources = &.{"examples/dashboard.cpp"}, .imports = &.{"avionix"}, .description = "Run the dashboard example" },
     .{ .name = "markdown", .sources = &.{"examples/markdown.cpp"}, .imports = &.{"avionix"}, .description = "Run the markdown example" },
+    .{ .name = "background", .sources = &.{"examples/background.cpp"}, .imports = &.{"avionix"}, .description = "Run the wallpaper example (drag the brightness slider)" },
     .{ .name = "attachments", .sources = &.{"examples/attachments.cpp"}, .imports = &.{"avionix"}, .description = "Run the attachment input example" },
+};
+
+const both_example: program_spec = .{
+    .name = "both",
+    .sources = &.{"examples/both.cpp"},
+    .imports = &.{ "avionix", "avionix.viewport" },
+    .description = "Run the wallpaper example (image background behind the TUI and the 3D model)",
+    .viewport = true,
+};
+
+const viewport_example: program_spec = .{
+    .name = "viewport",
+    .sources = &.{"examples/viewport.cpp"},
+    .imports = &.{ "avionix", "avionix.viewport" },
+    .description = "Run the 3D viewport example (terminal plus a graphical window)",
+    .viewport = true,
 };
 
 fn layerOf(comptime name: []const u8) layer {
     if (std.mem.eql(u8, name, "avionix")) return .lib;
+    if (std.mem.eql(u8, name, "avionix.viewport")) return .lib;
     if (std.mem.startsWith(u8, name, "avionix.entity.")) return .entity;
     if (std.mem.startsWith(u8, name, "avionix.object.")) return .object;
     if (std.mem.startsWith(u8, name, "avionix.task.")) return .task;
@@ -168,10 +276,10 @@ fn findSpec(comptime specs: []const module_spec, comptime name: []const u8) ?mod
 // module/path mismatches.
 comptime {
     @setEvalBranchQuota(100_000);
-    for (library_modules, 0..) |spec, index| {
+    for (all_modules, 0..) |spec, index| {
         const own = layerOf(spec.name);
         for (spec.imports) |import_name| {
-            const dep = findSpec(library_modules[0..index], import_name) orelse
+            const dep = findSpec(all_modules[0..index], import_name) orelse
                 @compileError(spec.name ++ " imports " ++ import_name ++ ", which is not declared before it");
             if (@backingInt(layerOf(dep.name)) > @backingInt(own))
                 @compileError("dependency direction violated: " ++ spec.name ++ " -> " ++ import_name);
@@ -241,6 +349,8 @@ const module_graph = struct {
         // post-processes `-c` output as an object file, which a BMI is not.
         // The driver still injects `-c`, hence the unused-argument warning.
         precompile.addArgs(&.{ "-Xclang", "-emit-module-interface", "-Wno-unused-command-line-argument" });
+        if (spec.glfw_headers) precompile.addPrefixedDirectoryArg("-isystem", b.path("libs/glfw/include"));
+        if (spec.stb_headers) precompile.addPrefixedDirectoryArg("-isystem", b.path("libs/stb"));
         graph.addModuleFileArgs(precompile, closure);
         precompile.addArg("-o");
         const bmi = precompile.addOutputFileArg(b.fmt("{s}.pcm", .{spec.name}));
@@ -248,6 +358,8 @@ const module_graph = struct {
         const compile = graph.compiler(b.fmt("compile {s}", .{spec.name}));
         compile.addArgs(&.{ "-x", "c++", "-c" });
         compile.addFileArg(b.path(spec.path));
+        if (spec.glfw_headers) compile.addPrefixedDirectoryArg("-isystem", b.path("libs/glfw/include"));
+        if (spec.stb_headers) compile.addPrefixedDirectoryArg("-isystem", b.path("libs/stb"));
         graph.addModuleFileArgs(compile, closure);
         compile.addArg("-o");
         const object = compile.addOutputFileArg(b.fmt("{s}.o", .{spec.name}));
@@ -359,12 +471,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
     const werror = b.option(bool, "werror", "Treat warnings in Avionix sources as errors (default: true)") orelse true;
+    // The viewport needs platform window headers. Windows headers ship with
+    // Zig; X11 and Cocoa headers come from the host system, so the default
+    // is on for Windows and for native builds only.
+    const viewport_enabled = b.option(bool, "viewport", "Build the 3D viewport library, its tests, and its example (default: on for Windows and native targets)") orelse
+        (target.result.os.tag == .windows or target.query.isNative());
 
     const flags = cxxFlags(b, target, optimize, .{ .werror = werror });
     const warning_flags = cxxFlags(b, target, optimize, .{ .werror = werror, .codegen = false });
 
     var graph: module_graph = .{ .b = b, .cxx_flags = flags };
     for (library_modules) |spec| graph.addModule(spec);
+    if (viewport_enabled) for (viewport_modules) |spec| graph.addModule(spec);
     for (test_modules) |spec| graph.addModule(spec);
 
     // Library artifact: every core module plus the facade.
@@ -377,6 +495,13 @@ pub fn build(b: *std.Build) void {
         }),
     });
     for (library_modules) |spec| avionix.root_module.addObjectFile(graph.get(spec.name).object);
+    // stb_image is third-party C: its own flags, no Avionix warnings, and no
+    // UBSan (it relies on shifts that UBSan flags).
+    avionix.root_module.addCSourceFile(.{
+        .file = b.path("libs/stb/stb_image_impl.c"),
+        .flags = &.{ "-std=c99", "-fno-sanitize=undefined" },
+    });
+    avionix.root_module.addIncludePath(b.path("libs/stb"));
     if (target.result.os.tag == .windows) avionix.root_module.linkSystemLibrary("user32", .{});
     b.installArtifact(avionix);
 
@@ -387,6 +512,32 @@ pub fn build(b: *std.Build) void {
     for (library_modules) |spec| {
         _ = bmi_dir.addCopyFile(graph.get(spec.name).bmi, b.fmt("{s}.pcm", .{spec.name}));
     }
+
+    // Viewport library: viewport modules plus GLFW. Consumers link it in
+    // addition to avionix and write `import avionix.viewport;`.
+    var viewport_lib: ?*std.Build.Step.Compile = null;
+    if (viewport_enabled) {
+        const lib = b.addLibrary(.{
+            .name = "avionix_viewport",
+            .root_module = b.createModule(.{
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+                .link_libcpp = true,
+                // Applies to the GLFW C sources only. Avionix objects come
+                // from the module graph with Avionix flags.
+                .sanitize_c = .off,
+            }),
+        });
+        for (viewport_modules) |spec| {
+            lib.root_module.addObjectFile(graph.get(spec.name).object);
+            _ = bmi_dir.addCopyFile(graph.get(spec.name).bmi, b.fmt("{s}.pcm", .{spec.name}));
+        }
+        addGlfw(b, lib.root_module, target);
+        lib.root_module.linkLibrary(avionix);
+        b.installArtifact(lib);
+        viewport_lib = lib;
+    }
     b.getInstallStep().dependOn(&b.addInstallDirectory(.{
         .source_dir = bmi_dir.getDirectory(),
         .install_dir = .prefix,
@@ -395,7 +546,7 @@ pub fn build(b: *std.Build) void {
     b.addNamedLazyPath("modules", bmi_dir.getDirectory());
 
     // Tests.
-    const tests = addProgram(b, &graph, avionix, target, optimize, test_program);
+    const tests = addProgram(b, &graph, avionix, viewport_lib, target, optimize, if (viewport_enabled) test_program_viewport else test_program);
     const run_tests = b.addRunArtifact(tests);
     run_tests.has_side_effects = true;
     run_tests.addPassthruArgs();
@@ -404,7 +555,7 @@ pub fn build(b: *std.Build) void {
         .dependOn(&b.addInstallArtifact(tests, .{}).step);
 
     // Benchmarks.
-    const benchmarks = addProgram(b, &graph, avionix, target, optimize, benchmark_program);
+    const benchmarks = addProgram(b, &graph, avionix, viewport_lib, target, optimize, benchmark_program);
     const run_benchmarks = b.addRunArtifact(benchmarks);
     run_benchmarks.has_side_effects = true;
     run_benchmarks.addPassthruArgs();
@@ -415,7 +566,7 @@ pub fn build(b: *std.Build) void {
     const examples_step = b.step("examples", "Build and install all examples");
     var example_exes: [example_programs.len]*std.Build.Step.Compile = undefined;
     for (example_programs, 0..) |spec, i| {
-        const exe = addProgram(b, &graph, avionix, target, optimize, spec);
+        const exe = addProgram(b, &graph, avionix, viewport_lib, target, optimize, spec);
         example_exes[i] = exe;
         examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
         const run = b.addRunArtifact(exe);
@@ -423,6 +574,35 @@ pub fn build(b: *std.Build) void {
         run.stdio = .inherit;
         run.addPassthruArgs();
         b.step(b.fmt("run-{s}", .{spec.name}), spec.description).dependOn(&run.step);
+    }
+    var viewport_exe: ?*std.Build.Step.Compile = null;
+    var background_exe: ?*std.Build.Step.Compile = null;
+    if (viewport_enabled) {
+        const exe = addProgram(b, &graph, avionix, viewport_lib, target, optimize, viewport_example);
+        viewport_exe = exe;
+        examples_step.dependOn(&b.addInstallArtifact(exe, .{}).step);
+        const run = b.addRunArtifact(exe);
+        run.has_side_effects = true;
+        run.stdio = .inherit;
+        run.addPassthruArgs();
+        b.step("run-viewport", viewport_example.description).dependOn(&run.step);
+
+        const bg = addProgram(b, &graph, avionix, viewport_lib, target, optimize, both_example);
+        background_exe = bg;
+        examples_step.dependOn(&b.addInstallArtifact(bg, .{}).step);
+        const run_bg = b.addRunArtifact(bg);
+        run_bg.has_side_effects = true;
+        run_bg.stdio = .inherit;
+        run_bg.addPassthruArgs();
+        b.step("run-viewport_background", both_example.description).dependOn(&run_bg.step);
+
+        // Drives the example's real window through open, orbit, select,
+        // drag, explode, capture, and close/reopen without a terminal.
+        // Needs a display and OpenGL 3.3.
+        const check = b.addRunArtifact(exe);
+        check.has_side_effects = true;
+        check.addArg("--self-test");
+        b.step("viewport-check", "Run the viewport example's scripted interaction check (needs a display)").dependOn(&check.step);
     }
 
     // End-to-end smoke test: each example runs under a pseudo terminal, is
@@ -458,12 +638,69 @@ pub fn build(b: *std.Build) void {
         run.addArgs(&.{ case.expect, case.keys });
         smoke_step.dependOn(&run.step);
     }
+    // The viewport example under a pseudo terminal with its window open.
+    // The terminal UI must still render, take keys, and exit cleanly.
+    if (background_exe) |exe| {
+        const run = b.addRunArtifact(smoke);
+        run.has_side_effects = true;
+        run.addArtifactArg(exe);
+        run.addArgs(&.{ "wallpaper example", "q" });
+        smoke_step.dependOn(&run.step);
+    }
+    if (viewport_exe) |exe| {
+        const run = b.addRunArtifact(smoke);
+        run.has_side_effects = true;
+        run.addArtifactArg(exe);
+        run.addArgs(&.{ "Avionix CAD", "eq" });
+        smoke_step.dependOn(&run.step);
+    }
+}
+
+fn addGlfw(b: *std.Build, module: *std.Build.Module, target: std.Build.ResolvedTarget) void {
+    const root = b.path("libs/glfw/src");
+    const flags = glfwFlags(target);
+    module.addIncludePath(b.path("libs/glfw/include"));
+    module.addCSourceFiles(.{ .root = root, .files = &glfw_common, .flags = flags });
+    switch (target.result.os.tag) {
+        .windows => {
+            module.addCSourceFiles(.{ .root = root, .files = &glfw_windows, .flags = flags });
+            module.linkSystemLibrary("gdi32", .{});
+            module.linkSystemLibrary("user32", .{});
+            module.linkSystemLibrary("shell32", .{});
+        },
+        .linux => {
+            // GLFW opens the X11 libraries at runtime; only their headers
+            // are needed to build.
+            module.addCSourceFiles(.{ .root = root, .files = &glfw_linux, .flags = flags });
+            module.linkSystemLibrary("dl", .{});
+            module.linkSystemLibrary("pthread", .{});
+            module.linkSystemLibrary("m", .{});
+        },
+        .macos => {
+            module.addCSourceFiles(.{ .root = root, .files = &glfw_macos, .flags = flags });
+            module.linkFramework("Cocoa", .{});
+            module.linkFramework("IOKit", .{});
+            module.linkFramework("CoreFoundation", .{});
+            module.linkFramework("QuartzCore", .{});
+        },
+        else => @panic("the 3D viewport supports Windows, Linux (X11), and macOS; pass -Dviewport=false"),
+    }
+}
+
+fn glfwFlags(target: std.Build.ResolvedTarget) []const []const u8 {
+    return switch (target.result.os.tag) {
+        .windows => &.{ "-D_GLFW_WIN32", "-std=c99" },
+        .linux => &.{ "-D_GLFW_X11", "-D_DEFAULT_SOURCE", "-std=c99" },
+        .macos => &.{"-D_GLFW_COCOA"},
+        else => &.{},
+    };
 }
 
 fn addProgram(
     b: *std.Build,
     graph: *module_graph,
     avionix: *std.Build.Step.Compile,
+    viewport_lib: ?*std.Build.Step.Compile,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     spec: program_spec,
@@ -484,6 +721,7 @@ fn addProgram(
             }
         }
     }
+    if (spec.viewport) exe.root_module.linkLibrary(viewport_lib.?);
     exe.root_module.linkLibrary(avionix);
     return exe;
 }

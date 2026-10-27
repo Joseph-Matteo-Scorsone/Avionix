@@ -37,6 +37,7 @@ export module avionix.object.terminal;
 
 import avionix.entity.geometry;
 import avionix.entity.error;
+import avionix.entity.terminal_graphics;
 
 // terminal_session owns every piece of terminal state Avionix changes:
 //
@@ -131,6 +132,12 @@ class terminal_session {
 
   // Current size of the visible terminal area in cells.
   [[nodiscard]] std::expected<avionix::size, error> query_size() const;
+
+  // Pixel size of one cell from the kernel's window size (POSIX
+  // TIOCGWINSZ), or zero when the platform or terminal does not report
+  // it. Windows consoles never do; the event loop asks the terminal
+  // instead.
+  [[nodiscard]] cell_pixels query_cell_pixels() const;
 
   [[nodiscard]] const terminal_options& options() const noexcept;
 
@@ -656,6 +663,8 @@ std::expected<avionix::size, error> terminal_session::query_size() const {
   };
 }
 
+cell_pixels terminal_session::query_cell_pixels() const { return {}; }
+
 #else  // POSIX
 
 struct terminal_session::state {
@@ -902,6 +911,16 @@ std::expected<avionix::size, error> terminal_session::query_size() const {
     return std::unexpected(platform_error("query terminal size", "ioctl(TIOCGWINSZ)"));
   }
   return avionix::size{ws.ws_col, ws.ws_row};
+}
+
+cell_pixels terminal_session::query_cell_pixels() const {
+  winsize ws{};
+  if (ioctl(state_->output, TIOCGWINSZ, &ws) != 0 || ws.ws_col == 0 || ws.ws_row == 0 ||
+      ws.ws_xpixel == 0 || ws.ws_ypixel == 0) {
+    return {};
+  }
+  return {static_cast<std::uint32_t>(ws.ws_xpixel / ws.ws_col),
+          static_cast<std::uint32_t>(ws.ws_ypixel / ws.ws_row)};
 }
 
 #endif

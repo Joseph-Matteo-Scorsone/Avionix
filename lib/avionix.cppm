@@ -25,11 +25,15 @@ export import avionix.entity.constraint;
 export import avionix.entity.error;
 export import avionix.entity.markdown;
 export import avionix.entity.latex;
+export import avionix.entity.image;
+export import avionix.entity.terminal_graphics;
+export import avionix.object.image_file;
 
 export import avionix.interface.widget;
 export import avionix.interface.layout;
 export import avionix.interface.controls;
 export import avionix.interface.markdown;
+export import avionix.interface.image;
 export import avionix.interface.application;
 
 import avionix.entity.unicode;

@@ -68,10 +68,10 @@ constexpr modifiers xterm_modifiers(std::uint32_t param) noexcept {
   return m;
 }
 
-// Parameters of a CSI sequence: up to 8 numeric fields separated by ';'.
+// Parameters of a CSI sequence: up to 16 numeric fields separated by ';'.
 // Sub-parameters after ':' are ignored.
 struct csi_params {
-  std::array<std::uint32_t, 8> values{};
+  std::array<std::uint32_t, 16> values{};
   std::size_t count{};
   char prefix{};  // private marker such as '<' or '?'
 
@@ -254,8 +254,18 @@ constexpr std::optional<event> decode_csi(char final_byte,
     }
     return event{m};
   }
+  if (p.prefix == '?' && final_byte == 'c') {
+    terminal_reply r{terminal_reply::kind::device_attributes, p.values, p.count};
+    return event{r};
+  }
   if (p.prefix != 0) {
-    return std::nullopt;  // private replies (e.g. DA) are ignored
+    return std::nullopt;  // other private replies are ignored
+  }
+  if (final_byte == 't' && p.count >= 3 && (p.values[0] == 6 || p.values[0] == 4)) {
+    terminal_reply r{p.values[0] == 6 ? terminal_reply::kind::cell_size
+                                      : terminal_reply::kind::text_area_size,
+                     p.values, p.count};
+    return event{r};
   }
   switch (final_byte) {
     case '~': {

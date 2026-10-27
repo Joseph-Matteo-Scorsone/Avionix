@@ -6,6 +6,7 @@ module;
 #include <cstring>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -18,6 +19,7 @@ import avionix.entity.style;
 import avionix.entity.cell;
 import avionix.object.buffer;
 import avionix.object.ansi_encoder;
+import avionix.entity.terminal_graphics;
 
 // Double-buffered diff renderer.
 //
@@ -25,6 +27,13 @@ import avionix.object.ansi_encoder;
 //   back vs front ──collect_changed_runs──► changed runs
 //   changed runs ──ansi_encoder──► one contiguous byte buffer
 //   swap: back becomes the new front
+//
+// Pixel images (graphics_placement) are written after the changed runs in
+// the same synchronized update. The renderer remembers what it showed and
+// re-sends an image only when its payload or area changed, the screen was
+// cleared, or, for Sixel and iTerm2 images that live in the cells, a run
+// overwrote part of it. A Sixel or iTerm2 image that disappears or moves
+// has its old cells repainted; a Kitty image is deleted by id.
 //
 // The renderer never writes to the terminal. task.render hands the bytes to
 // terminal_session, which keeps terminal I/O out of this object and lets
@@ -127,12 +136,28 @@ diff_statistics collect_changed_runs(const render_buffer& front,
   return stats;
 }
 
+// One pixel image for this frame.
+struct graphics_placement {
+  std::uint32_t id{};       // nonzero, stable while the image stays on screen
+  std::uint64_t version{};  // changes whenever `payload` draws something else
+  rect area{};              // cells the image covers
+  graphics_protocol protocol{graphics_protocol::none};
+  // Draws the image with the cursor at area.origin. Borrowed: the widget
+  // that placed it keeps the bytes alive until present() returns.
+  std::string_view payload;
+  // The image has transparent pixels. Sixel and iTerm2 leave those pixels
+  // as they were, so a changed image first has its cells repainted to
+  // clear the previous picture.
+  bool transparent{};
+};
+
 struct frame_statistics {
   std::uint64_t cells_inspected{};
   std::uint64_t cells_changed{};
   std::uint64_t cells_written{};
   std::uint64_t runs{};
   std::uint64_t bytes{};
+  std::uint64_t images_written{};
   bool full_redraw{};
 };
 
@@ -179,6 +204,23 @@ class renderer {
     invalidate();
   }
 
+  // Images for the next present(). Replaces the previous frame's list; an
+  // image missing from it is removed from the screen.
+  void set_graphics(std::vector<graphics_placement> placements) {
+    graphics_ = std::move(placements);
+  }
+
+  // Bytes that delete every Kitty image still shown, for session teardown.
+  // Sixel and iTerm2 pixels leave with the alternate screen.
+  [[nodiscard]] std::string release_graphics() {
+    std::string out;
+    for (const shown_image& s : shown_)
+      if (s.protocol == graphics_protocol::kitty) append_kitty_delete(out, s.id);
+    shown_.clear();
+    graphics_.clear();
+    return out;
+  }
+
   // Where to leave the visible cursor after the frame, or nullopt to hide
   // it. Used by text inputs.
   void set_cursor(std::optional<position> where) noexcept { cursor_request_ = where; }
@@ -201,6 +243,30 @@ class renderer {
       full_redraw_ = false;
     }
 
+    // Old images that vanished or moved. Cell-resident images are erased by
+    // making their old cells differ from anything a widget can draw, so the
+    // diff repaints them.
+    kitty_deletes_.clear();
+    for (const shown_image& s : shown_) {
+      const graphics_placement* now = find_graphics(s.id);
+      if (now != nullptr && now->area == s.area && now->protocol == s.protocol)
+        continue;
+      if (s.protocol == graphics_protocol::kitty) {
+        kitty_deletes_.push_back(s.id);
+      } else if (!full) {
+        front_.fill(intersect(s.area, front_.area()), stale_image_cell());
+      }
+    }
+
+    if (!full) {
+      for (const graphics_placement& p : graphics_) {
+        if (!p.transparent || p.protocol == graphics_protocol::kitty) continue;
+        const shown_image* before = find_shown(p.id);
+        if (before != nullptr && before->version != p.version && before->area == p.area)
+          front_.fill(intersect(p.area, front_.area()), stale_image_cell());
+      }
+    }
+
     const auto diff = collect_changed_runs(front_, back_, runs_);
     stats_.cells_inspected = diff.cells_inspected;
     stats_.cells_changed = diff.cells_changed;
@@ -210,7 +276,24 @@ class renderer {
     const bool cursor_changes =
         !cursor_visible_ || *cursor_visible_ != cursor_request_.has_value() ||
         (cursor_request_ && encoder_.cursor() != cursor_request_);
-    if (!full && runs_.empty() && !cursor_changes) {
+    const auto needs_image = [&](const graphics_placement& p) {
+      if (full) return true;
+      const shown_image* before = find_shown(p.id);
+      if (before == nullptr || before->version != p.version || before->area != p.area ||
+          before->protocol != p.protocol)
+        return true;
+      if (p.protocol == graphics_protocol::kitty) return false;
+      return std::ranges::any_of(runs_, [&](const changed_run& r) {
+        return static_cast<std::int32_t>(r.y) >= p.area.top() &&
+               static_cast<std::int32_t>(r.y) < p.area.bottom() &&
+               static_cast<std::int32_t>(r.begin) < p.area.right() &&
+               static_cast<std::int32_t>(r.end) > p.area.left();
+      });
+    };
+    const bool images_change =
+        !kitty_deletes_.empty() || std::ranges::any_of(graphics_, needs_image);
+
+    if (!full && runs_.empty() && !cursor_changes && !images_change) {
       std::swap(front_, back_);
       return {};
     }
@@ -243,6 +326,23 @@ class renderer {
     // and the next frame from inheriting the last run's URL.
     encoder_.set_link({});
 
+    // Images go over the cells just written.
+    std::string deletes;
+    for (const std::uint32_t id : kitty_deletes_) append_kitty_delete(deletes, id);
+    encoder_.append_raw(deletes);
+    for (const graphics_placement& p : graphics_) {
+      if (p.payload.empty() || !needs_image(p)) continue;
+      encoder_.move_to(p.area.origin);
+      encoder_.reset_style();
+      encoder_.append_raw(p.payload);
+      // The terminal cursor position after an image is protocol dependent.
+      encoder_.forget_state();
+      ++stats_.images_written;
+    }
+    shown_.clear();
+    for (const graphics_placement& p : graphics_)
+      if (!p.payload.empty()) shown_.push_back({p.id, p.version, p.area, p.protocol});
+
     if (cursor_request_) {
       encoder_.move_to(*cursor_request_);
       encoder_.set_cursor_visible(true);
@@ -258,6 +358,34 @@ class renderer {
   [[nodiscard]] const frame_statistics& last_frame() const noexcept { return stats_; }
 
  private:
+  struct shown_image {
+    std::uint32_t id{};
+    std::uint64_t version{};
+    rect area{};
+    graphics_protocol protocol{};
+  };
+
+  // A cell no widget can draw (controls never reach the buffer), used to
+  // force a repaint of cells that an image covered.
+  [[nodiscard]] static cell stale_image_cell() noexcept {
+    return cell::from_grapheme("\x01", 1, style{});
+  }
+
+  [[nodiscard]] const graphics_placement* find_graphics(
+      std::uint32_t id) const noexcept {
+    for (const auto& p : graphics_)
+      if (p.id == id && !p.payload.empty()) return &p;
+    return nullptr;
+  }
+  [[nodiscard]] const shown_image* find_shown(std::uint32_t id) const noexcept {
+    for (const auto& s : shown_)
+      if (s.id == id) return &s;
+    return nullptr;
+  }
+
+  std::vector<graphics_placement> graphics_{};
+  std::vector<shown_image> shown_{};
+  std::vector<std::uint32_t> kitty_deletes_{};
   render_buffer front_{};
   render_buffer back_{};
   ansi_encoder encoder_;

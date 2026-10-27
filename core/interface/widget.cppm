@@ -19,6 +19,8 @@ import avionix.entity.unicode;
 import avionix.entity.cell;
 import avionix.entity.event;
 import avionix.object.buffer;
+import avionix.object.renderer;
+export import avionix.entity.terminal_graphics;
 
 // Widgets describe drawing and interaction. They draw through a
 // render_context, which is a clipped, translated view of the back buffer,
@@ -39,6 +41,10 @@ export namespace avionix {
 // Per-frame state shared by every render_context of one frame.
 struct frame_state {
   std::optional<position> cursor{};
+  // What the terminal can show, set by the application before drawing.
+  graphics_support graphics{};
+  // Images registered by widgets this frame, handed to the renderer.
+  std::vector<graphics_placement> placements{};
 };
 
 class render_context {
@@ -131,6 +137,27 @@ class render_context {
   }
 
   [[nodiscard]] render_buffer& buffer() const noexcept { return *buffer_; }
+
+  // Image support for this frame. Offscreen rendering (tests,
+  // render_to_buffer) reports none, so widgets fall back to cells.
+  [[nodiscard]] const graphics_support& graphics() const noexcept {
+    return frame_->graphics;
+  }
+
+  // Shows a pixel image over a local cell rect, clipped to this context.
+  // A placement that does not fit the clip entirely is dropped, because
+  // terminals cannot crop an image to cells. `payload` must draw the image
+  // with the cursor at the rect's top-left cell. The payload is borrowed:
+  // the caller keeps it alive until the frame is presented, which a widget
+  // does by caching it in a member.
+  bool place_graphics(std::uint32_t id, std::uint64_t version, rect local,
+                      std::string_view payload, bool transparent = false) const {
+    const rect absolute = local.translated(area_.origin);
+    if (absolute.empty() || intersect(absolute, clip_) != absolute) return false;
+    frame_->placements.push_back(
+        {id, version, absolute, frame_->graphics.protocol, payload, transparent});
+    return true;
+  }
 
  private:
   render_buffer* buffer_;

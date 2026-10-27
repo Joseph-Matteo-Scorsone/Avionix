@@ -239,9 +239,31 @@ const avionix_tests::suite other{
          }},
         {"unknown_sequence_is_ignored",
          [] {
-           const auto events = decode_all("\x1b[?1;2cz");
+           const auto events = decode_all("\x1b[?1;2yz");
            check_equal(events.size(), std::size_t{1});
            check(std::get<key_event>(events[0]).is(U'z'));
+         }},
+        {"device_attributes_reply",
+         [] {
+           // Windows Terminal 1.24's reply, 13 parameters, Sixel is 4.
+           const auto events =
+               decode_all("\x1b[?61;4;6;7;14;21;22;23;24;28;32;42;52cz");
+           check_equal(events.size(), std::size_t{2});
+           const auto* r = std::get_if<terminal_reply>(&events[0]);
+           check(r != nullptr && r->what == terminal_reply::kind::device_attributes);
+           check(r != nullptr && r->count == 13 && r->values[0] == 61 &&
+                 r->values[1] == 4);
+           check(std::get<key_event>(events[1]).is(U'z'));
+         }},
+        {"cell_size_reply",
+         [] {
+           const auto events = decode_all("\x1b[6;20;10t\x1b[4;600;1200t\x1b[8;24;80t");
+           check_equal(events.size(), std::size_t{2});
+           const auto* cell = std::get_if<terminal_reply>(&events[0]);
+           check(cell != nullptr && cell->what == terminal_reply::kind::cell_size &&
+                 cell->values[1] == 20 && cell->values[2] == 10);
+           const auto* area = std::get_if<terminal_reply>(&events[1]);
+           check(area != nullptr && area->what == terminal_reply::kind::text_area_size);
          }},
         {"overlong_sequence_is_malformed",
          [] {

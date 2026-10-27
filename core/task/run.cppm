@@ -7,6 +7,7 @@ module;
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -17,6 +18,7 @@ import avionix.entity.geometry;
 import avionix.entity.color;
 import avionix.entity.event;
 import avionix.entity.error;
+import avionix.entity.terminal_graphics;
 import avionix.object.terminal;
 import avionix.object.terminal_capabilities;
 import avionix.object.buffer;
@@ -44,6 +46,10 @@ import avionix.task.resize;
 
 export namespace avionix {
 
+// Primary device attributes (DA1) and cell size in pixels (XTWINOPS 16).
+inline constexpr std::string_view device_attributes_query = "\x1b[c";
+inline constexpr std::string_view cell_size_query = "\x1b[16t";
+
 struct run_options {
   terminal_options terminal{};
   input_reader_options input{};
@@ -52,6 +58,9 @@ struct run_options {
   std::chrono::milliseconds frame_interval{16};
   // Overrides detected color depth.
   std::optional<color_depth> colors{};
+  // Overrides image detection. graphics_protocol::none forces half-block
+  // images.
+  std::optional<graphics_protocol> graphics{};
 };
 
 // What the loop drives. All calls happen on the UI thread.
@@ -93,6 +102,25 @@ std::expected<void, error> run(event_queue& queue, D& driver,
   apply_resize(screen, start_size);
   driver.handle(event{resize_event{start_size}});
 
+  // Image support: environment or override first, then terminal replies.
+  graphics_support graphics{options.graphics.value_or(caps.graphics),
+                            session->query_cell_pixels(),
+                            options.colors.value_or(caps.colors)};
+  const bool ask_attributes = !options.graphics && caps.query_graphics;
+  bool awaiting_attributes = ask_attributes;
+  const auto ask_cell_size = [&] {
+    if (!graphics.cell.known() &&
+        (graphics.protocol != graphics_protocol::none || awaiting_attributes))
+      (void)session->write(cell_size_query);
+  };
+  if (ask_attributes) (void)session->write(device_attributes_query);
+  ask_cell_size();
+  const auto publish_graphics = [&] {
+    if constexpr (requires { driver.set_graphics(graphics); })
+      driver.set_graphics(graphics);
+  };
+  publish_graphics();
+
   std::expected<void, error> outcome{};
   {
     // Declared after the session so it is destroyed (and joined) first.
@@ -105,8 +133,37 @@ std::expected<void, error> run(event_queue& queue, D& driver,
     const std::stop_token never_stop{};
 
     const auto handle = [&](const event& value) {
+      if (const auto* reply = std::get_if<terminal_reply>(&value)) {
+        // Replies to the loop's own queries; never forwarded.
+        if (reply->what == terminal_reply::kind::device_attributes &&
+            awaiting_attributes) {
+          awaiting_attributes = false;
+          bool sixel = false;
+          for (std::size_t i = 1; i < reply->count; ++i)
+            sixel = sixel || reply->values[i] == 4;
+          graphics.protocol =
+              sixel ? graphics_protocol::sixel : graphics_protocol::none;
+          ask_cell_size();
+          publish_graphics();
+        } else if (reply->what == terminal_reply::kind::cell_size &&
+                   reply->count >= 3 && reply->values[1] > 0 && reply->values[2] > 0) {
+          graphics.cell = {reply->values[2], reply->values[1]};
+          publish_graphics();
+        }
+        return;
+      }
       if (const auto* r = std::get_if<resize_event>(&value)) {
         apply_resize(screen, r->extent);
+        // A font change also changes the cell size.
+        if (graphics.protocol != graphics_protocol::none) {
+          const cell_pixels reported = session->query_cell_pixels();
+          if (reported.known()) {
+            graphics.cell = reported;
+            publish_graphics();
+          } else {
+            (void)session->write(cell_size_query);
+          }
+        }
       }
       driver.handle(value);
     };
@@ -121,6 +178,8 @@ std::expected<void, error> run(event_queue& queue, D& driver,
           // Text inputs place the cursor while drawing, so the
           // request is read after draw and before present.
           screen.set_cursor(driver.cursor());
+          if constexpr (requires { driver.take_graphics(); })
+            screen.set_graphics(driver.take_graphics());
         });
         if (!frame) {
           outcome = std::unexpected(std::move(frame.error()));
@@ -150,6 +209,9 @@ std::expected<void, error> run(event_queue& queue, D& driver,
     }
   }
 
+  if (const std::string release = screen.release_graphics(); !release.empty()) {
+    (void)session->write(release);
+  }
   if (auto restored = session->restore(); !restored && outcome) {
     return restored;
   }

@@ -17,6 +17,17 @@ enum class failure : std::uint8_t {
   io_failed,
   invalid_argument,
   already_running,
+  // The 3D viewport could not obtain a display, window, or OpenGL 3.3
+  // context. The context text says which and what to change.
+  graphics_unavailable,
+  // A graphics call failed after the context was created (shader compile,
+  // framebuffer setup).
+  graphics_failed,
+  // A scene update or capture refers to a revision older than the current
+  // one and was rejected instead of being shown as current.
+  stale_revision,
+  // A call was made from a thread other than the one that owns the object.
+  wrong_thread,
 };
 
 [[nodiscard]] constexpr std::string_view describe(failure value) noexcept {
@@ -35,6 +46,14 @@ enum class failure : std::uint8_t {
       return "invalid argument";
     case failure::already_running:
       return "already running";
+    case failure::graphics_unavailable:
+      return "graphics unavailable";
+    case failure::graphics_failed:
+      return "graphics operation failed";
+    case failure::stale_revision:
+      return "stale revision";
+    case failure::wrong_thread:
+      return "called from the wrong thread";
   }
   return "unknown failure";
 }
