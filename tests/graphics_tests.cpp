@@ -88,6 +88,72 @@ const avionix_tests::suite detection{
 const avionix_tests::suite encoders{
     "graphics_encoders",
     {
+        {"cached_sixel_preserves_dither_and_reuses_storage",
+         [] {
+           auto img = solid(40, 24, 0, 0, 96);
+           for (std::size_t i = 0; i < img.pixels.size(); i += 4) {
+             img.pixels[i] = static_cast<std::uint8_t>((i / 4) % 256);
+             img.pixels[i + 1] = static_cast<std::uint8_t>((i / 160) * 10);
+           }
+           std::string original, settled, drag;
+           append_sixel(original, img);
+           sixel_encoder_state state;
+           append_sixel(settled, img, state);
+           check(settled == original,
+                 "stateful encoder preserves settled output exactly");
+           const auto palette = state.palette_commands;
+           const auto* indices = state.indices.data();
+           const auto* errors = state.err_now.data();
+           append_sixel(drag, img, state, true);
+           check(drag == original,
+                 "drag retains original colors and dithering exactly");
+           check(state.indices.data() == indices && state.err_now.data() == errors,
+                 "index and diffusion buffers are reused");
+           auto changed = solid(8, 7, 255, 0, 0);
+           drag.clear();
+           append_sixel(drag, changed, state, true);
+           check(state.palette_commands == palette,
+                 "palette remains stable when drag pixels change");
+           settled.clear();
+           append_sixel(settled, changed, state);
+           check(state.palette_commands != palette,
+                 "settled frame refreshes the adaptive palette");
+           original.clear();
+           append_sixel(original, changed);
+           check(settled == original,
+                 "resize and refreshed lookup cache match a fresh encode");
+           for (std::size_t i = 3; i < changed.pixels.size(); i += 4)
+             changed.pixels[i] = 0;
+           drag.clear();
+           append_sixel(drag, changed, state, true);
+           check(drag.find("#0!8") == std::string::npos,
+                 "transparent frame retains no old pixels");
+         }},
+        {"interactive_sixel_reuses_band_storage",
+         [] {
+           auto img = solid(8, 7, 255, 0, 0);
+           std::vector<std::uint8_t> scratch;
+           std::string out;
+           append_sixel_interactive(out, img, scratch);
+           check(out.starts_with("\x1bP0;1;0q\"1;1;8;7"));
+           check(out.ends_with("\x1b\\"));
+           check(contains(out, "#48;2;100;0;0"));
+           check(contains(out, "#48!8~"));
+           check(contains(out, "#48!8@"), "partial final band");
+           const auto* storage = scratch.data();
+           const auto capacity = out.capacity();
+           const auto expected = out;
+           out.clear();
+           append_sixel_interactive(out, img, scratch);
+           check(out == expected, "repeated frames are identical");
+           check(scratch.data() == storage && out.capacity() == capacity,
+                 "band and payload allocations are reused after warmup");
+           for (std::size_t i = 3; i < img.pixels.size(); i += 4) img.pixels[i] = 0;
+           out.clear();
+           append_sixel_interactive(out, img, scratch);
+           check(!contains(out, "#48!"),
+                 "transparent pixels and old band bits are skipped");
+         }},
         {"sixel_structure",
          [] {
            std::string out;

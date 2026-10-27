@@ -25,6 +25,7 @@
 #include <vector>
 
 import avionix.entity.geometry;
+import avionix.entity.terminal_graphics;
 import avionix.entity.color;
 import avionix.entity.style;
 import avionix.entity.unicode;
@@ -317,6 +318,61 @@ int main(int argc, char** argv) {
       render_context ctx{b, b.area(), frame};
       root.render_in(ctx);
       return counters{};
+    });
+  }
+
+  // A shaded viewport-sized image: compare settled and interactive Sixel.
+  // Warmup in bench() retains both the output string and band allocation.
+  {
+    image_rgba8 image{300, 240, std::vector<std::uint8_t>(300 * 240 * 4)};
+    for (std::uint32_t y = 0; y < image.height; ++y) {
+      for (std::uint32_t x = 0; x < image.width; ++x) {
+        const auto i = (std::size_t{y} * image.width + x) * 4;
+        image.pixels[i] = static_cast<std::uint8_t>(x * 255 / image.width);
+        image.pixels[i + 1] = static_cast<std::uint8_t>(y * 255 / image.height);
+        image.pixels[i + 2] = 96;
+        image.pixels[i + 3] = 255;
+      }
+    }
+    std::string payload;
+    std::vector<std::uint8_t> scratch;
+    bench(opts, "sixel.adaptive_300x240", "pixel", [&] {
+      payload.clear();
+      append_sixel(payload, image);
+      keep(payload);
+      return counters{.terminal_bytes = payload.size(), .items = 300 * 240};
+    });
+    sixel_encoder_state cached;
+    // Seed with a settled frame, exactly as image_view does before dragging.
+    payload.clear();
+    append_sixel(payload, image, cached);
+    bench(opts, "sixel.cached_dithered_300x240", "pixel", [&] {
+      payload.clear();
+      append_sixel(payload, image, cached, true);
+      keep(payload);
+      return counters{.terminal_bytes = payload.size(), .items = 300 * 240};
+    });
+    // Rotate prebuilt gradient frames to exercise new colors during motion,
+    // without counting input generation as encoding work.
+    std::array<image_rgba8, 8> moving;
+    for (std::size_t f = 0; f < moving.size(); ++f) {
+      moving[f] = image;
+      for (std::size_t i = 0; i < image.pixels.size(); i += 4)
+        moving[f].pixels[i] =
+            static_cast<std::uint8_t>((unsigned{image.pixels[i]} + f * 7) % 256);
+    }
+    std::size_t frame = 0;
+    bench(opts, "sixel.cached_moving_300x240", "pixel", [&] {
+      payload.clear();
+      append_sixel(payload, moving[frame++ % moving.size()], cached, true);
+      keep(payload);
+      return counters{.terminal_bytes = payload.size(), .items = 300 * 240};
+    });
+    bench(opts, "sixel.interactive_300x240", "pixel", [&] {
+      payload.clear();
+      append_sixel_interactive(payload, image, scratch);
+      keep(payload);
+      return counters{.terminal_bytes = payload.size(), .items = 300 * 240};
     });
   }
 

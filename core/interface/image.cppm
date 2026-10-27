@@ -61,6 +61,13 @@ class image_view final : public component {
     transparent_ = has_transparency(image_);
   }
   [[nodiscard]] const image_rgba8& image() const noexcept { return image_; }
+  // Recycle the pixel allocation when producing the next frame.
+  [[nodiscard]] image_rgba8 take_image() { return std::exchange(image_, {}); }
+  void set_interactive(bool active) {
+    if (interactive_ == active) return;
+    interactive_ = active;
+    ++version_;
+  }
 
   // How the last render showed the image: a pixel protocol, or
   // graphics_protocol::none for half blocks.
@@ -102,13 +109,20 @@ class image_view final : public component {
       if (payload_version_ != version_ || payload_area_ != area ||
           payload_support_ != support) {
         payload_.clear();
-        const image_rgba8 fitted = fit_image(image_, t.width, t.height);
+        image_rgba8 resized;
+        if (image_.width != t.width || image_.height != t.height)
+          resized = fit_image(image_, t.width, t.height);
+        const image_rgba8& fitted = resized.pixels.empty() ? image_ : resized;
         switch (support.protocol) {
           case graphics_protocol::kitty:
-            append_kitty(payload_, fitted, id_, area.width(), t.rows);
+            append_kitty(payload_, fitted, id_, area.width(), t.rows, 0,
+                         &kitty_scratch_);
             break;
           case graphics_protocol::sixel:
-            append_sixel(payload_, fitted);
+            if (interactive_)
+              append_sixel_interactive(payload_, fitted, sixel_scratch_);
+            else
+              append_sixel(payload_, fitted, sixel_state_);
             break;
           case graphics_protocol::iterm2:
             append_iterm2(payload_, fitted, area.width(), t.rows);
@@ -149,8 +163,12 @@ class image_view final : public component {
     if (blocks_version_ != version_ || blocks_extent_ != cells) {
       // Fit at the cell's real shape (twice as tall as wide), 4x8 samples
       // per cell, then average 2x4 samples per quadrant.
-      const image_rgba8 big = fit_image(image_, cells.width * 4, cells.height * 8);
-      blocks_ = {cells.width * 2, cells.height * 2, {}};
+      image_rgba8 resized;
+      if (image_.width != cells.width * 4 || image_.height != cells.height * 8)
+        resized = fit_image(image_, cells.width * 4, cells.height * 8);
+      const image_rgba8& big = resized.pixels.empty() ? image_ : resized;
+      blocks_.width = cells.width * 2;
+      blocks_.height = cells.height * 2;
       blocks_.pixels.resize(std::size_t{blocks_.width} * blocks_.height * 4);
       for (std::uint32_t y = 0; y < blocks_.height; ++y) {
         for (std::uint32_t x = 0; x < blocks_.width; ++x) {
@@ -244,6 +262,10 @@ class image_view final : public component {
     }
   }
 
+  std::string kitty_scratch_;
+  bool interactive_{};
+  sixel_encoder_state sixel_state_;
+  std::vector<std::uint8_t> sixel_scratch_;
   std::uint32_t id_;
   image_rgba8 image_{};
   std::uint64_t version_{1};

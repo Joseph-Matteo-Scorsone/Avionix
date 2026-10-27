@@ -210,118 +210,145 @@ inline void append_base64(std::string& out, const std::uint8_t* data,
 //
 // Pixels with alpha below 128 are left untouched so the cell background
 // shows through.
-inline void append_sixel(std::string& out, const image_rgba8& img) {
+struct sixel_encoder_state {
+  using rgb = std::array<std::int32_t, 3>;
+  struct bin {
+    std::uint64_t count{};
+    std::array<std::uint64_t, 3> sum{};
+  };
+  struct box {
+    std::size_t begin{};
+    std::size_t end{};
+  };
+  std::vector<bin> bins;
+  std::vector<std::uint16_t> used;
+  std::vector<box> boxes;
+  std::vector<rgb> palette;
+  std::string palette_commands;
+  std::vector<std::int16_t> nearest;
+  std::vector<std::uint32_t> indices;
+  std::vector<std::array<float, 3>> err_now, err_next;
+  std::vector<std::uint8_t> bits;
+  std::vector<bool> present;
+};
+
+// Reuse the last settled palette during a drag, including its nearest-color
+// cache. Scratch storage survives both settled and interactive frames.
+inline void append_sixel(std::string& out, const image_rgba8& img,
+                         sixel_encoder_state& state, bool reuse_palette = false) {
   using rgb = std::array<std::int32_t, 3>;
   const std::uint32_t w = img.width;
   const std::uint32_t h = img.height;
   out += std::format("\x1bP0;1;0q\"1;1;{};{}", w, h);
 
-  // Histogram on 5 bits per channel, with exact sums for bin centroids.
-  struct bin {
-    std::uint64_t count{};
-    std::array<std::uint64_t, 3> sum{};
-  };
-  std::vector<bin> bins(32768);
+  using bin = sixel_encoder_state::bin;
+  using box = sixel_encoder_state::box;
+  auto& bins = state.bins;
+  auto& used = state.used;
+  auto& boxes = state.boxes;
+  auto& palette = state.palette;
+  auto& nearest = state.nearest;
   const auto key = [](std::int32_t r, std::int32_t g, std::int32_t b) {
     return static_cast<std::size_t>(((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3));
   };
-  for (std::size_t i = 0; i + 3 < img.pixels.size(); i += 4) {
-    if (img.pixels[i + 3] < 128) continue;
-    bin& b = bins[key(img.pixels[i], img.pixels[i + 1], img.pixels[i + 2])];
-    ++b.count;
-    for (std::size_t c = 0; c < 3; ++c) b.sum[c] += img.pixels[i + c];
-  }
-  std::vector<std::uint16_t> used;
-  for (std::size_t k = 0; k < bins.size(); ++k)
-    if (bins[k].count > 0) used.push_back(static_cast<std::uint16_t>(k));
+  if (!reuse_palette || palette.empty()) {
+    bins.assign(32768, {});
+    used.clear();
+    boxes.clear();
+    palette.clear();
+    state.palette_commands.clear();
+    nearest.assign(32768, -1);
+    for (std::size_t i = 0; i + 3 < img.pixels.size(); i += 4) {
+      if (img.pixels[i + 3] < 128) continue;
+      bin& b = bins[key(img.pixels[i], img.pixels[i + 1], img.pixels[i + 2])];
+      ++b.count;
+      for (std::size_t c = 0; c < 3; ++c) b.sum[c] += img.pixels[i + c];
+    }
+    for (std::size_t k = 0; k < bins.size(); ++k)
+      if (bins[k].count > 0) used.push_back(static_cast<std::uint16_t>(k));
 
-  // Median cut: repeatedly split the box with the widest channel range
-  // (weighted by population) at its population median.
-  struct box {
-    std::size_t begin{};
-    std::size_t end{};
-  };
-  const auto channel = [](std::uint16_t k, std::size_t c) {
-    return static_cast<std::int32_t>((k >> (10 - 5 * c)) & 31U);
-  };
-  const auto measure = [&](const box& bx, std::size_t& widest) {
-    std::array<std::int32_t, 3> lo{31, 31, 31};
-    std::array<std::int32_t, 3> hi{0, 0, 0};
-    std::uint64_t population = 0;
-    for (std::size_t i = bx.begin; i < bx.end; ++i) {
+    // Median cut: repeatedly split the box with the widest channel range
+    // (weighted by population) at its population median.
+    const auto channel = [](std::uint16_t k, std::size_t c) {
+      return static_cast<std::int32_t>((k >> (10 - 5 * c)) & 31U);
+    };
+    const auto measure = [&](const box& bx, std::size_t& widest) {
+      std::array<std::int32_t, 3> lo{31, 31, 31};
+      std::array<std::int32_t, 3> hi{0, 0, 0};
+      std::uint64_t population = 0;
+      for (std::size_t i = bx.begin; i < bx.end; ++i) {
+        for (std::size_t c = 0; c < 3; ++c) {
+          lo[c] = std::min(lo[c], channel(used[i], c));
+          hi[c] = std::max(hi[c], channel(used[i], c));
+        }
+        population += bins[used[i]].count;
+      }
+      widest = 0;
+      for (std::size_t c = 1; c < 3; ++c)
+        if (hi[c] - lo[c] > hi[widest] - lo[widest]) widest = c;
+      return static_cast<double>(hi[widest] - lo[widest]) *
+             std::sqrt(static_cast<double>(population));
+    };
+    if (!used.empty()) boxes.push_back({0, used.size()});
+    while (boxes.size() < 256) {
+      std::size_t pick = boxes.size();
+      std::size_t axis = 0;
+      double best = 0.0;
+      for (std::size_t i = 0; i < boxes.size(); ++i) {
+        if (boxes[i].end - boxes[i].begin < 2) continue;
+        std::size_t a = 0;
+        const double score = measure(boxes[i], a);
+        if (score > best) {
+          best = score;
+          pick = i;
+          axis = a;
+        }
+      }
+      if (pick == boxes.size()) break;
+      const box bx = boxes[pick];
+      const auto first = used.begin() + static_cast<std::ptrdiff_t>(bx.begin);
+      const auto last = used.begin() + static_cast<std::ptrdiff_t>(bx.end);
+      std::sort(first, last, [&](std::uint16_t a, std::uint16_t b) {
+        return channel(a, axis) < channel(b, axis);
+      });
+      std::uint64_t total = 0;
+      for (auto it = first; it != last; ++it) total += bins[*it].count;
+      std::uint64_t running = 0;
+      std::size_t split = bx.begin + 1;
+      for (std::size_t i = bx.begin; i + 1 < bx.end; ++i) {
+        running += bins[used[i]].count;
+        split = i + 1;
+        if (running * 2 >= total) break;
+      }
+      boxes[pick] = {bx.begin, split};
+      boxes.push_back({split, bx.end});
+    }
+
+    // Palette entries are the population-weighted mean of each box, rounded
+    // to Sixel's percent precision so diffusion sees the color shown.
+    palette.reserve(boxes.size());
+    for (const box& bx : boxes) {
+      std::array<std::uint64_t, 3> sum{};
+      std::uint64_t count = 0;
+      for (std::size_t i = bx.begin; i < bx.end; ++i) {
+        count += bins[used[i]].count;
+        for (std::size_t c = 0; c < 3; ++c) sum[c] += bins[used[i]].sum[c];
+      }
+      rgb color{};
+      std::array<int, 3> percent{};
       for (std::size_t c = 0; c < 3; ++c) {
-        lo[c] = std::min(lo[c], channel(used[i], c));
-        hi[c] = std::max(hi[c], channel(used[i], c));
+        percent[c] = static_cast<int>(std::lround(
+            static_cast<double>(sum[c]) / static_cast<double>(count) * 100.0 / 255.0));
+        color[c] = static_cast<std::int32_t>(std::lround(percent[c] * 255.0 / 100.0));
       }
-      population += bins[used[i]].count;
+      state.palette_commands += std::format("#{};2;{};{};{}", palette.size(),
+                                            percent[0], percent[1], percent[2]);
+      palette.push_back(color);
     }
-    widest = 0;
-    for (std::size_t c = 1; c < 3; ++c)
-      if (hi[c] - lo[c] > hi[widest] - lo[widest]) widest = c;
-    return static_cast<double>(hi[widest] - lo[widest]) *
-           std::sqrt(static_cast<double>(population));
-  };
-  std::vector<box> boxes;
-  if (!used.empty()) boxes.push_back({0, used.size()});
-  while (boxes.size() < 256) {
-    std::size_t pick = boxes.size();
-    std::size_t axis = 0;
-    double best = 0.0;
-    for (std::size_t i = 0; i < boxes.size(); ++i) {
-      if (boxes[i].end - boxes[i].begin < 2) continue;
-      std::size_t a = 0;
-      const double score = measure(boxes[i], a);
-      if (score > best) {
-        best = score;
-        pick = i;
-        axis = a;
-      }
-    }
-    if (pick == boxes.size()) break;
-    const box bx = boxes[pick];
-    const auto first = used.begin() + static_cast<std::ptrdiff_t>(bx.begin);
-    const auto last = used.begin() + static_cast<std::ptrdiff_t>(bx.end);
-    std::sort(first, last, [&](std::uint16_t a, std::uint16_t b) {
-      return channel(a, axis) < channel(b, axis);
-    });
-    std::uint64_t total = 0;
-    for (auto it = first; it != last; ++it) total += bins[*it].count;
-    std::uint64_t running = 0;
-    std::size_t split = bx.begin + 1;
-    for (std::size_t i = bx.begin; i + 1 < bx.end; ++i) {
-      running += bins[used[i]].count;
-      split = i + 1;
-      if (running * 2 >= total) break;
-    }
-    boxes[pick] = {bx.begin, split};
-    boxes.push_back({split, bx.end});
   }
+  out += state.palette_commands;
 
-  // Palette entries are the population-weighted mean of each box, rounded
-  // to Sixel's percent precision so diffusion sees the color shown.
-  std::vector<rgb> palette;
-  palette.reserve(boxes.size());
-  for (const box& bx : boxes) {
-    std::array<std::uint64_t, 3> sum{};
-    std::uint64_t count = 0;
-    for (std::size_t i = bx.begin; i < bx.end; ++i) {
-      count += bins[used[i]].count;
-      for (std::size_t c = 0; c < 3; ++c) sum[c] += bins[used[i]].sum[c];
-    }
-    rgb color{};
-    std::array<int, 3> percent{};
-    for (std::size_t c = 0; c < 3; ++c) {
-      percent[c] = static_cast<int>(std::lround(
-          static_cast<double>(sum[c]) / static_cast<double>(count) * 100.0 / 255.0));
-      color[c] = static_cast<std::int32_t>(std::lround(percent[c] * 255.0 / 100.0));
-    }
-    out += std::format("#{};2;{};{};{}", palette.size(), percent[0], percent[1],
-                       percent[2]);
-    palette.push_back(color);
-  }
-
-  // Nearest palette entry per 15-bit color, filled on demand.
-  std::vector<std::int16_t> nearest(32768, -1);
+  // Nearest palette entry per 15-bit color, retained until the palette changes.
   const auto lookup = [&](std::int32_t r, std::int32_t g,
                           std::int32_t b) -> std::uint32_t {
     std::int16_t& slot = nearest[key(r, g, b)];
@@ -346,9 +373,12 @@ inline void append_sixel(std::string& out, const image_rgba8& img) {
 
   // Index image with serpentine Floyd-Steinberg diffusion.
   constexpr std::uint32_t transparent = 0xFFFF;
-  std::vector<std::uint32_t> indices(std::size_t{w} * h, transparent);
-  std::vector<std::array<float, 3>> err_now(std::size_t{w} + 2);
-  std::vector<std::array<float, 3>> err_next(std::size_t{w} + 2);
+  auto& indices = state.indices;
+  auto& err_now = state.err_now;
+  auto& err_next = state.err_next;
+  indices.assign(std::size_t{w} * h, transparent);
+  err_now.assign(std::size_t{w} + 2, {});
+  err_next.assign(std::size_t{w} + 2, {});
   constexpr float strength = 0.75F;
   if (!palette.empty()) {
     for (std::uint32_t y = 0; y < h; ++y) {
@@ -380,8 +410,10 @@ inline void append_sixel(std::string& out, const image_rgba8& img) {
   }
 
   const std::size_t colors = palette.size();
-  std::vector<std::uint8_t> bits(colors * w, 0);
-  std::vector<bool> present(colors, false);
+  auto& bits = state.bits;
+  auto& present = state.present;
+  bits.assign(colors * w, 0);
+  present.assign(colors, false);
   for (std::uint32_t band = 0; band < h; band += 6) {
     std::fill(present.begin(), present.end(), false);
     for (std::uint32_t row = 0; row < 6 && band + row < h; ++row) {
@@ -422,6 +454,60 @@ inline void append_sixel(std::string& out, const image_rgba8& img) {
   out += "\x1b\\";
 }
 
+inline void append_sixel(std::string& out, const image_rgba8& img) {
+  sixel_encoder_state state;
+  append_sixel(out, img, state);
+}
+
+// Interactive Sixel: fixed 4x4x4 palette, no histogram or diffusion.
+// One reusable six-row band replaces all per-frame quantization allocations.
+inline void append_sixel_interactive(std::string& out, const image_rgba8& img,
+                                     std::vector<std::uint8_t>& scratch) {
+  const auto w = img.width;
+  out += std::format("\x1bP0;1;0q\"1;1;{};{}", w, img.height);
+  for (unsigned c = 0; c < 64; ++c)
+    out += std::format("#{};2;{};{};{}", c, ((c >> 4) & 3U) * 100 / 3,
+                       ((c >> 2) & 3U) * 100 / 3, (c & 3U) * 100 / 3);
+  scratch.resize(std::size_t{w} * 64);
+  for (std::uint32_t band = 0; band < img.height; band += 6) {
+    std::fill(scratch.begin(), scratch.end(), std::uint8_t{0});
+    std::array<bool, 64> present{};
+    for (std::uint32_t y = 0; y < 6 && band + y < img.height; ++y) {
+      for (std::uint32_t x = 0; x < w; ++x) {
+        const auto* p = &img.pixels[(std::size_t{band + y} * w + x) * 4];
+        if (p[3] < 128) continue;
+        const unsigned c = ((unsigned{p[0]} * 3 + 127) / 255) * 16 +
+                           ((unsigned{p[1]} * 3 + 127) / 255) * 4 +
+                           (unsigned{p[2]} * 3 + 127) / 255;
+        scratch[std::size_t{c} * w + x] |= static_cast<std::uint8_t>(1U << y);
+        present[c] = true;
+      }
+    }
+    bool first = true;
+    for (std::size_t c = 0; c < 64; ++c) {
+      if (!present[c]) continue;
+      if (!first) out += '$';
+      first = false;
+      out += std::format("#{}", c);
+      const auto* line = scratch.data() + c * w;
+      std::uint32_t end = w;
+      while (end && line[end - 1] == 0) --end;
+      for (std::uint32_t x = 0; x < end;) {
+        std::uint32_t run = 1;
+        while (x + run < end && line[x + run] == line[x]) ++run;
+        const char ch = static_cast<char>(63 + line[x]);
+        if (run >= 4)
+          out += std::format("!{}{}", run, ch);
+        else
+          out.append(run, ch);
+        x += run;
+      }
+    }
+    out += '-';
+  }
+  out += "\x1b\\";
+}
+
 // Kitty graphics: transmits RGBA and places it over `cols` x `rows` cells
 // at the cursor without moving it (C=1). Re-sending the same `image_id`
 // replaces the image. Chunks stay under the protocol's 4096-byte limit.
@@ -433,8 +519,10 @@ inline constexpr std::int32_t kitty_under_backgrounds = -1'073'741'825;
 
 inline void append_kitty(std::string& out, const image_rgba8& img,
                          std::uint32_t image_id, std::uint32_t cols, std::uint32_t rows,
-                         std::int32_t z = 0) {
-  std::string data;
+                         std::int32_t z = 0, std::string* scratch = nullptr) {
+  std::string temporary;
+  std::string& data = scratch != nullptr ? *scratch : temporary;
+  data.clear();
   graphics_detail::append_base64(data, img.pixels.data(), img.pixels.size());
   constexpr std::size_t chunk = 4096;
   std::size_t offset = 0;

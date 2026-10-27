@@ -482,7 +482,8 @@ class viewport {
   // callers pass a size with that aspect. Uses the window's OpenGL
   // context, else a hidden context kept until destruction, else the CPU
   // renderer when no OpenGL 3.3 context can be created. UI thread.
-  [[nodiscard]] std::expected<image_rgba8, error> render_view(pixel_extent size) {
+  [[nodiscard]] std::expected<image_rgba8, error> render_view(
+      pixel_extent size, image_rgba8 recycled = {}) {
     if (size.empty() || size.width > 8192 || size.height > 8192) {
       return std::unexpected(error{
           "render viewport image", failure::invalid_argument,
@@ -492,20 +493,25 @@ class viewport {
     const double scale = extent_.empty() ? content_scale_
                                          : content_scale_ * size.height /
                                                static_cast<double>(extent_.height);
-    frame_inputs f;
+    auto& f = interactive_frame_;
     build_frame(f, camera_, size, true, true, scale);
     const frame_description d = describe(f);
     if (graphics_) {
       graphics_->window.make_current();
-      if (auto image = graphics_->renderer.capture(d, options_.samples)) return image;
+      if (auto image =
+              graphics_->renderer.capture(d, options_.samples, std::move(recycled)))
+        return image;
     } else if (!options_.software_only && ensure_offscreen()) {
       offscreen_->window.make_current();
       offscreen_->renderer.sync(store_);
-      if (auto image = offscreen_->renderer.capture(d, options_.samples)) return image;
+      if (auto image =
+              offscreen_->renderer.capture(d, options_.samples, std::move(recycled)))
+        return image;
       release_offscreen();
       offscreen_failed_ = true;
     }
-    return cpu_.render(d, store_, size.width * size.height > 1'000'000 ? 1 : 2);
+    return cpu_.render(d, store_, size.width * size.height > 1'000'000 ? 1 : 2,
+                       std::move(recycled));
   }
 
   // Which renderer render_view() used last: "opengl" or "cpu".
@@ -1357,10 +1363,15 @@ class viewport {
   // line widths in this output.
   void build_frame(frame_inputs& f, const camera& cam, pixel_extent extent,
                    bool interactive, bool show_selection, double scale) const {
+    f.items.clear();
+    f.planes.clear();
+    f.lines_depth.clear();
+    f.lines_top.clear();
+    f.screen.clear();
     std::unordered_map<node_id, mat4, id_hash> worlds;
     aabb box;
     for (const auto& r : resolved_) {
-      worlds.emplace(r.id, r.world);
+      if (!overlays_.empty()) worlds.emplace(r.id, r.world);
       if (!r.visible || !r.record->desc.mesh) continue;
       const auto* m = store_.mesh(r.record->desc.mesh);
       if (m == nullptr) continue;
@@ -1376,7 +1387,8 @@ class viewport {
                          look != nullptr ? *look : material{}, highlight});
     }
     f.view = frame_for(cam, extent, box);
-    f.planes = enabled_planes();
+    for (const auto& section : sections_)
+      if (section.enabled) f.planes.push_back(section.value);
 
     for (const auto& [layer, overlay] : overlays_) {
       auto& target = overlay.depth_tested ? f.lines_depth : f.lines_top;
@@ -1447,7 +1459,7 @@ class viewport {
     if (!graphics_ || extent_.empty()) return;
     graphics_->window.make_current();
     resolve_current();
-    frame_inputs f;
+    auto& f = interactive_frame_;
     build_frame(f, camera_, extent_, true, true, content_scale_);
     frame_description d = describe(f);
     // A desktop window has nothing of the terminal behind it.
@@ -1533,6 +1545,7 @@ class viewport {
   std::optional<graphics> offscreen_;  // hidden context for render_view
   bool offscreen_failed_{};
   software_renderer cpu_;
+  frame_inputs interactive_frame_;
   std::uint64_t changes_{1};
   std::optional<interval_handle> animation_timer_;
   loop_adapter loop_{};

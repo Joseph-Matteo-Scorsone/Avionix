@@ -1023,6 +1023,39 @@ const avionix_tests::suite terminal_suite{
                      clear.placements[0].version != frame.placements[0].version,
                  "transparent pictures are flagged");
          }},
+        {"panel_drag_reuses_pixels_and_restores_quality",
+         [] {
+           harness h;
+           viewport_panel panel{h.view};
+           const graphics_support sixel{graphics_protocol::sixel, {10, 20}};
+           const rect area{{0, 0}, {30, 12}};
+           (void)draw_panel(panel, sixel, area, {40, 16});
+           const auto* pixels = panel.picture().pixels.data();
+           const auto extent = h.view.extent();
+           event_context ctx;
+           (void)panel.on_event(
+               mouse_event{mouse_button::left, mouse_action::press, {3, 3}}, ctx);
+           (void)panel.on_event(
+               mouse_event{mouse_button::left, mouse_action::drag, {8, 3}}, ctx);
+           const auto drag = draw_panel(panel, sixel, area, {40, 16});
+           check(!drag.placements.empty());
+           check(drag.placements[0].payload.find("#63;2;100;100;100") !=
+                     std::string_view::npos,
+                 "drag uses the fast 64-color palette");
+           check(panel.picture().pixels.data() == pixels,
+                 "pixel allocation is recycled");
+           check(h.view.extent() == extent,
+                 "drag keeps surface size and picking coordinates");
+           const auto version = drag.placements[0].version;
+           (void)panel.on_event(
+               mouse_event{mouse_button::none, mouse_action::release, {8, 3}}, ctx);
+           const auto settled = draw_panel(panel, sixel, area, {40, 16});
+           check(settled.placements[0].version != version,
+                 "release refreshes the adaptive palette");
+           check(settled.placements[0].payload.find("#63;2;100;100;100") ==
+                     std::string_view::npos,
+                 "release restores the adaptive palette");
+         }},
         {"panel_clicks_select_through_cells",
          [] {
            harness h;

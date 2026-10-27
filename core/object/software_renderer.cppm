@@ -7,6 +7,7 @@ module;
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <utility>
 #include <vector>
 
 export module avionix.object.software_renderer;
@@ -36,7 +37,8 @@ class software_renderer {
   // samples per axis and box-filters them, for smooth edges.
   [[nodiscard]] image_rgba8 render(const frame_description& frame,
                                    const scene_store& store,
-                                   std::uint32_t supersample = 2) {
+                                   std::uint32_t supersample = 2,
+                                   image_rgba8 recycled = {}) {
     const std::uint32_t out_w = frame.view.extent.width;
     const std::uint32_t out_h = frame.view.extent.height;
     ss_ = std::clamp<std::uint32_t>(supersample, 1, 4);
@@ -87,7 +89,7 @@ class software_renderer {
     for (const world_line& l : frame.lines_on_top)
       line(l.a, l.b, l.color, false, false);
     screen(frame.screen);
-    return resolve(out_w, out_h);
+    return resolve(out_w, out_h, std::move(recycled));
   }
 
  private:
@@ -379,9 +381,11 @@ class software_renderer {
     }
   }
 
-  [[nodiscard]] image_rgba8 resolve(std::uint32_t out_w, std::uint32_t out_h) const {
-    image_rgba8 out{out_w, out_h,
-                    std::vector<std::uint8_t>(std::size_t{out_w} * out_h * 4)};
+  [[nodiscard]] image_rgba8 resolve(std::uint32_t out_w, std::uint32_t out_h,
+                                    image_rgba8 out) const {
+    out.width = out_w;
+    out.height = out_h;
+    out.pixels.resize(std::size_t{out_w} * out_h * 4);
     const float samples = static_cast<float>(ss_ * ss_);
     for (std::uint32_t y = 0; y < out_h; ++y) {
       for (std::uint32_t x = 0; x < out_w; ++x) {

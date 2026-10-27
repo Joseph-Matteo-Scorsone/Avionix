@@ -63,6 +63,7 @@ class viewport_panel final : public component {
   void set_backdrop(const backdrop* wallpaper) noexcept {
     backdrop_ = wallpaper;
     drawn_backdrop_ = ~std::uint64_t{0};
+    cached_backdrop_version_ = ~std::uint64_t{0};
   }
 
   void render(render_context& context) override {
@@ -98,8 +99,10 @@ class viewport_panel final : public component {
                            !backdrop_->under_text() && !view_->is_open();
     const std::uint64_t backdrop_state = composite ? backdrop_->version() : 0;
     if (size != picture_ || view_->changes() != drawn_changes_ ||
-        view_->is_open() != drawn_open_ || backdrop_state != drawn_backdrop_) {
-      if (auto image = view_->render_view(size)) {
+        view_->is_open() != drawn_open_ || backdrop_state != drawn_backdrop_ ||
+        (composite &&
+         cached_backdrop_area_ != rect{area.origin, {area.width(), t.rows}})) {
+      if (auto image = view_->render_view(size, image_.take_image())) {
         if (composite) over_backdrop(*image, {area.origin, {area.width(), t.rows}});
         image_.set_image(std::move(*image));
         picture_ = size;
@@ -108,6 +111,7 @@ class viewport_panel final : public component {
         drawn_backdrop_ = backdrop_state;
       }
     }
+    image_.set_interactive(dragging_);
     image_.render(context);
   }
 
@@ -123,9 +127,15 @@ class viewport_panel final : public component {
 
  private:
   // Straight-alpha "over" onto the wallpaper pixels behind `cells`.
-  void over_backdrop(image_rgba8& image, rect cells) const {
-    const image_rgba8 under =
-        backdrop_->pixels_behind(cells, {image.width, image.height});
+  void over_backdrop(image_rgba8& image, rect cells) {
+    if (cached_backdrop_version_ != backdrop_->version() ||
+        cached_backdrop_area_ != cells || under_.width != image.width ||
+        under_.height != image.height) {
+      under_ = backdrop_->pixels_behind(cells, {image.width, image.height});
+      cached_backdrop_version_ = backdrop_->version();
+      cached_backdrop_area_ = cells;
+    }
+    const image_rgba8& under = under_;
     if (under.pixels.size() != image.pixels.size()) return;
     for (std::size_t i = 0; i + 3 < image.pixels.size(); i += 4) {
       const std::uint32_t a = image.pixels[i + 3];
@@ -182,6 +192,7 @@ class viewport_panel final : public component {
         if (const auto b = button(m.button)) {
           context.request_focus(*this);
           context.capture_pointer();
+          dragging_ = true;
           down_ = *b;
           view_->simulate(pointer_moved{*at, m.mods});
           view_->simulate(pointer_pressed{*at, *b, m.mods});
@@ -193,6 +204,7 @@ class viewport_panel final : public component {
         view_->simulate(pointer_moved{*at, m.mods});
         return event_result::handled;
       case mouse_action::release: {
+        dragging_ = false;
         // Terminals often report releases without the button.
         const pointer_button b = button(m.button).value_or(down_);
         view_->simulate(pointer_released{*at, b, m.mods});
@@ -202,6 +214,10 @@ class viewport_panel final : public component {
     return event_result::ignored;
   }
 
+  image_rgba8 under_;
+  std::uint64_t cached_backdrop_version_{~std::uint64_t{0}};
+  rect cached_backdrop_area_{};
+  bool dragging_{};
   viewport* view_;
   image_view image_{};
   rect area_{};

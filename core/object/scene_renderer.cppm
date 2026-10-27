@@ -145,6 +145,10 @@ class scene_renderer {
     screen_program_ = std::exchange(other.screen_program_, {});
     stream_vao_ = std::exchange(other.stream_vao_, 0);
     stream_vbo_ = std::exchange(other.stream_vbo_, 0);
+    capture_fbo_ = std::exchange(other.capture_fbo_, {});
+    capture_rbo_ = std::exchange(other.capture_rbo_, {});
+    capture_extent_ = std::exchange(other.capture_extent_, {});
+    capture_samples_ = std::exchange(other.capture_samples_, -1);
     max_samples_ = other.max_samples_;
     return *this;
   }
@@ -165,6 +169,12 @@ class scene_renderer {
     if (stream_vbo_ != 0) gl_.DeleteBuffers(1, &stream_vbo_);
     if (stream_vao_ != 0) gl_.DeleteVertexArrays(1, &stream_vao_);
     stream_vbo_ = stream_vao_ = 0;
+    gl_.DeleteRenderbuffers(3, capture_rbo_.data());
+    gl_.DeleteFramebuffers(2, capture_fbo_.data());
+    capture_rbo_ = {};
+    capture_fbo_ = {};
+    capture_extent_ = {};
+    capture_samples_ = -1;
     loaded_ = false;
   }
 
@@ -196,7 +206,7 @@ class scene_renderer {
 
   // Renders offscreen at frame.view.extent and returns top-down RGBA rows.
   [[nodiscard]] std::expected<image_rgba8, error> capture(
-      const frame_description& frame, int samples = 4) {
+      const frame_description& frame, int samples = 4, image_rgba8 image = {}) {
     const auto w = static_cast<gl::sizei>(frame.view.extent.width);
     const auto h = static_cast<gl::sizei>(frame.view.extent.height);
     if (w <= 0 || h <= 0 || w > 8192 || h > 8192) {
@@ -205,49 +215,60 @@ class scene_renderer {
                 std::format("output size {}x{} is outside 1..8192", w, h), 0});
     }
     samples = std::clamp(samples, 0, max_samples_);
-    std::array<gl::uint, 2> fbo{};
-    std::array<gl::uint, 3> rbo{};
-    gl_.GenFramebuffers(2, fbo.data());
-    gl_.GenRenderbuffers(3, rbo.data());
-    const auto cleanup = [&] {
-      gl_.BindFramebuffer(gl::framebuffer, 0);
-      gl_.DeleteRenderbuffers(3, rbo.data());
-      gl_.DeleteFramebuffers(2, fbo.data());
-    };
-    // fbo[0]: multisampled color + depth; fbo[1]: single-sample color.
-    gl_.BindFramebuffer(gl::framebuffer, fbo[0]);
-    gl_.BindRenderbuffer(gl::renderbuffer_target, rbo[0]);
-    gl_.RenderbufferStorageMultisample(gl::renderbuffer_target, samples, gl::rgba8, w,
-                                       h);
-    gl_.FramebufferRenderbuffer(gl::framebuffer, gl::color_attachment0,
-                                gl::renderbuffer_target, rbo[0]);
-    gl_.BindRenderbuffer(gl::renderbuffer_target, rbo[1]);
-    gl_.RenderbufferStorageMultisample(gl::renderbuffer_target, samples,
-                                       gl::depth24_stencil8, w, h);
-    gl_.FramebufferRenderbuffer(gl::framebuffer, gl::depth_stencil_attachment,
-                                gl::renderbuffer_target, rbo[1]);
-    if (gl_.CheckFramebufferStatus(gl::framebuffer) != gl::framebuffer_complete) {
-      cleanup();
-      return std::unexpected(error{
-          "capture viewport", failure::graphics_failed,
-          std::format("{}x{} framebuffer with {} samples is incomplete", w, h, samples),
-          0});
+    auto& fbo = capture_fbo_;
+    auto& rbo = capture_rbo_;
+    if (fbo[0] == 0) {
+      gl_.GenFramebuffers(2, fbo.data());
+      gl_.GenRenderbuffers(3, rbo.data());
     }
+    const bool resize =
+        capture_extent_ != frame.view.extent || capture_samples_ != samples;
+    if (resize) {
+      // fbo[0]: multisampled color + depth; fbo[1]: single-sample color.
+      gl_.BindFramebuffer(gl::framebuffer, fbo[0]);
+      gl_.BindRenderbuffer(gl::renderbuffer_target, rbo[0]);
+      gl_.RenderbufferStorageMultisample(gl::renderbuffer_target, samples, gl::rgba8, w,
+                                         h);
+      gl_.FramebufferRenderbuffer(gl::framebuffer, gl::color_attachment0,
+                                  gl::renderbuffer_target, rbo[0]);
+      gl_.BindRenderbuffer(gl::renderbuffer_target, rbo[1]);
+      gl_.RenderbufferStorageMultisample(gl::renderbuffer_target, samples,
+                                         gl::depth24_stencil8, w, h);
+      gl_.FramebufferRenderbuffer(gl::framebuffer, gl::depth_stencil_attachment,
+                                  gl::renderbuffer_target, rbo[1]);
+      if (gl_.CheckFramebufferStatus(gl::framebuffer) != gl::framebuffer_complete) {
+        gl_.BindFramebuffer(gl::framebuffer, 0);
+        return std::unexpected(
+            error{"capture viewport", failure::graphics_failed,
+                  std::format("{}x{} framebuffer with {} samples is incomplete", w, h,
+                              samples),
+                  0});
+      }
+      gl_.BindFramebuffer(gl::framebuffer, fbo[1]);
+      gl_.BindRenderbuffer(gl::renderbuffer_target, rbo[2]);
+      gl_.RenderbufferStorageMultisample(gl::renderbuffer_target, 0, gl::rgba8, w, h);
+      gl_.FramebufferRenderbuffer(gl::framebuffer, gl::color_attachment0,
+                                  gl::renderbuffer_target, rbo[2]);
+      if (gl_.CheckFramebufferStatus(gl::framebuffer) != gl::framebuffer_complete) {
+        gl_.BindFramebuffer(gl::framebuffer, 0);
+        return std::unexpected(error{"capture viewport", failure::graphics_failed,
+                                     "resolve framebuffer is incomplete", 0});
+      }
+      capture_extent_ = frame.view.extent;
+      capture_samples_ = samples;
+    }
+    gl_.BindFramebuffer(gl::framebuffer, fbo[0]);
     render(frame);
-    gl_.BindFramebuffer(gl::framebuffer, fbo[1]);
-    gl_.BindRenderbuffer(gl::renderbuffer_target, rbo[2]);
-    gl_.RenderbufferStorageMultisample(gl::renderbuffer_target, 0, gl::rgba8, w, h);
-    gl_.FramebufferRenderbuffer(gl::framebuffer, gl::color_attachment0,
-                                gl::renderbuffer_target, rbo[2]);
     gl_.BindFramebuffer(gl::read_framebuffer, fbo[0]);
     gl_.BindFramebuffer(gl::draw_framebuffer, fbo[1]);
     gl_.BlitFramebuffer(0, 0, w, h, 0, 0, w, h, gl::color_buffer_bit, gl::nearest);
     gl_.BindFramebuffer(gl::read_framebuffer, fbo[1]);
-    image_rgba8 image{static_cast<std::uint32_t>(w), static_cast<std::uint32_t>(h), {}};
+    image.width = static_cast<std::uint32_t>(w);
+    image.height = static_cast<std::uint32_t>(h);
     image.pixels.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4);
     gl_.PixelStorei(gl::pack_alignment, 1);
     gl_.ReadPixels(0, 0, w, h, gl::rgba, gl::unsigned_byte, image.pixels.data());
-    cleanup();
+    gl_.BindFramebuffer(gl::framebuffer, 0);
     if (auto ok = check("capture viewport"); !ok)
       return std::unexpected(std::move(ok.error()));
     // Blending into a transparent target leaves antialiased edge colors
@@ -816,6 +837,10 @@ void main() { frag = v_color; })";
   program screen_program_{};
   gl::uint stream_vao_{};
   gl::uint stream_vbo_{};
+  std::array<gl::uint, 2> capture_fbo_{};
+  std::array<gl::uint, 3> capture_rbo_{};
+  pixel_extent capture_extent_{};
+  int capture_samples_{-1};
   int max_samples_{};
 };
 
