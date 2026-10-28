@@ -403,3 +403,26 @@ Screen-level drags, on widgets that do not capture the pointer, highlight cells 
 `render_buffer::rows()` returns UTF-8 row strings, skipping continuation cells and preserving trailing spaces. `find(text)` returns the first matching terminal position or `std::nullopt`, including correct columns after wide glyphs. `cell::link()` is 0 for ordinary text. Any other value is an id into that buffer's link table, and `link_target(id)` returns the URL. `clear` and `resize` drop the table. These methods own their results and perform no terminal I/O.
 
 The three graphics demos are `zig build run-viewport` (3D viewport), `zig build run-background` (background image), and `zig build run-viewport_background` (background image plus 3D viewport). In `run-background`, click or drag the brightness slider to adjust it from 0?100%. In `run-viewport_background`, press `d` to toggle dimmed/full brightness. Both demos use `b` to toggle the image and `q` to quit.
+
+### Monochrome equity charts
+
+`equity_chart` is available through `import avionix;`, with no viewport dependency. It draws a white line on black using Braille characters, a UTC time axis, and an automatically scaled Y-axis that includes zero. Points are spaced by elapsed time.
+
+```cpp
+#include <chrono>
+#include <vector>
+import avionix;
+
+using namespace std::chrono;
+const auto start = sys_days{2026y/October/1};
+std::vector<avionix::equity_point> points{
+    {start, -25.0}, {start + hours{6}, 40.0}, {start + days{1}, 15.0}};
+avionix::column body;
+body.add(avionix::constraint::fixed(2), avionix::text{"Performance"});
+auto& chart = body.add(avionix::constraint::fixed(12), avionix::equity_chart{points});
+body.add(avionix::constraint::fill(), avionix::text{"Notes below the chart."});
+// Replace the series on the UI thread (for example, inside app.post):
+chart.set_points(points);
+```
+
+`set_points` owns and stably sorts the samples by timestamp. Duplicate timestamps draw vertical segments; NaN and infinity break the line. Empty data shows `No data`; constant and single-point series are supported. Time labels show dates for spans of at least a day and UTC times otherwise. The chart clips to its layout area and leaves tiny areas blank when axes do not fit. Run `zig build run-equity` for a chart between text blocks.

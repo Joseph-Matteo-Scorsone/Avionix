@@ -73,6 +73,7 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.interface.widget", .path = "core/interface/widget.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.cell", "avionix.entity.event", "avionix.entity.terminal_graphics", "avionix.object.buffer", "avionix.object.renderer" } },
     .{ .name = "avionix.interface.layout", .path = "core/interface/layout.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.event", "avionix.entity.constraint", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.controls", .path = "core/interface/controls.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.event", "avionix.interface.widget" } },
+    .{ .name = "avionix.interface.equity_chart", .path = "core/interface/equity_chart.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.image", .path = "core/interface/image.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.terminal_graphics", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.markdown", .path = "core/interface/markdown.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.markdown", "avionix.interface.widget", "avionix.interface.controls" } },
     .{ .name = "avionix.interface.application", .path = "core/interface/application.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.cell", "avionix.entity.event", "avionix.entity.error", "avionix.object.buffer", "avionix.object.event_queue", "avionix.object.renderer", "avionix.task.run", "avionix.interface.widget" } },
@@ -97,6 +98,7 @@ const library_modules = [_]module_spec{
         "avionix.interface.widget",
         "avionix.interface.layout",
         "avionix.interface.controls",
+        "avionix.interface.equity_chart",
         "avionix.interface.markdown",
         "avionix.interface.image",
         "avionix.interface.application",
@@ -203,6 +205,7 @@ const test_program: program_spec = .{
         "tests/event_tests.cpp",
         "tests/layout_tests.cpp",
         "tests/widget_tests.cpp",
+        "tests/chart_tests.cpp",
         "tests/feature_tests.cpp",
         "tests/markdown_tests.cpp",
         "tests/terminal_tests.cpp",
@@ -236,6 +239,7 @@ const example_programs = [_]program_spec{
     .{ .name = "markdown", .sources = &.{"examples/markdown.cpp"}, .imports = &.{"avionix"}, .description = "Run the markdown example" },
     .{ .name = "background", .sources = &.{"examples/background.cpp"}, .imports = &.{"avionix"}, .description = "Run the wallpaper example (drag the brightness slider)" },
     .{ .name = "attachments", .sources = &.{"examples/attachments.cpp"}, .imports = &.{"avionix"}, .description = "Run the attachment input example" },
+    .{ .name = "equity", .sources = &.{"examples/equity.cpp"}, .imports = &.{"avionix"}, .description = "Run the monochrome equity chart example" },
 };
 
 const both_example: program_spec = .{

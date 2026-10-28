@@ -43,6 +43,7 @@ set(avionix_modules
     core/interface/widget.cppm
     core/interface/layout.cppm
     core/interface/controls.cppm
+    core/interface/equity_chart.cppm
     core/interface/markdown.cppm
     core/interface/image.cppm
     core/interface/application.cppm
@@ -185,6 +186,7 @@ if(BUILD_TESTING)
         tests/event_tests.cpp
         tests/layout_tests.cpp
         tests/widget_tests.cpp
+        tests/chart_tests.cpp
         tests/feature_tests.cpp
         tests/markdown_tests.cpp
         tests/terminal_tests.cpp
@@ -207,7 +209,7 @@ if(BUILD_TESTING)
 endif()
 
 if(AVIONIX_BUILD_EXAMPLES)
-    foreach(example IN ITEMS hello counter dashboard markdown attachments background)
+    foreach(example IN ITEMS hello counter dashboard markdown attachments background equity)
         add_executable(avionix-${example} examples/${example}.cpp)
         target_compile_features(avionix-${example} PRIVATE cxx_std_26)
         target_link_libraries(avionix-${example} PRIVATE avionix)
