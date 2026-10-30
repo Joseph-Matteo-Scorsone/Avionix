@@ -20,6 +20,10 @@ enum class attribute : std::uint16_t {
   reverse = 1U << 5U,
   hidden = 1U << 6U,
   strikethrough = 1U << 7U,
+  // Not an SGR attribute: marks a glyph drawn as wallpaper pixels behind
+  // the content. The encoder ignores it and text selection copies the cell
+  // as a space.
+  backdrop = 1U << 8U,
 };
 
 [[nodiscard]] constexpr attribute operator|(attribute a, attribute b) noexcept {

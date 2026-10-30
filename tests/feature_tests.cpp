@@ -316,7 +316,8 @@ const avionix_tests::suite features{
         check(!late);
         check(app.last_copied() == "hello");
       }},
-     {"copy_on_select_can_stay_off", [] {
+     {"copy_on_select_can_stay_off",
+      [] {
         application app{{.quit_on_ctrl_c = false, .copy_on_select = false}};
         text label{"hello"};
         (void)application::render_to_buffer(label, {10, 1});
@@ -329,5 +330,19 @@ const avionix_tests::suite features{
         check(app.last_copied().empty());
         app.simulate(label, key_event{key::character, U'c', modifiers::ctrl});
         check(app.last_copied() == "hello");
+      }},
+     {"copy_skips_backdrop_glyphs", [] {
+        application app{{.quit_on_ctrl_c = false}};
+        canvas art{[](render_context& context) {
+          context.draw_text_styled({0, 0}, "a", {});
+          context.draw_text_styled({1, 0}, "▚", {.attributes = attribute::backdrop});
+          context.draw_text_styled({2, 0}, "b", {});
+        }};
+        (void)application::render_to_buffer(art, {10, 1});
+        app.simulate(art, mouse_event{mouse_button::left, mouse_action::press, {0, 0}});
+        app.simulate(art, mouse_event{mouse_button::left, mouse_action::drag, {2, 0}});
+        app.simulate(art,
+                     mouse_event{mouse_button::left, mouse_action::release, {2, 0}});
+        check(app.last_copied() == "a b");
       }}}};
 }  // namespace

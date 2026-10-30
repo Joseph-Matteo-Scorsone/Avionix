@@ -115,7 +115,8 @@ class ansi_encoder {
 
   void set_style(const style& requested) {
     const style next{downgrade(requested.foreground, depth_),
-                     downgrade(requested.background, depth_), requested.attributes};
+                     downgrade(requested.background, depth_),
+                     requested.attributes & ~attribute::backdrop};
     if (pen_ && *pen_ == next) {
       return;
     }

@@ -182,6 +182,13 @@ class application {
     std::erase_if(timers_, [](const auto& timer) { return !*timer.active; });
   }
 
+  // Writes `bytes` to the terminal before the next frame, for escape
+  // sequences Avionix does not model. UI thread only.
+  void write_raw(std::string_view bytes) {
+    pending_output_ += bytes;
+    dirty_ = true;
+  }
+
   // Delivers a user_event through the normal event path. Thread safe.
   void notify(user_event value) { queue_.push(event{value}); }
 
@@ -461,6 +468,15 @@ class application {
       if (left < right)
         buffer.apply_style({{left, y}, {static_cast<std::uint32_t>(right - left), 1}},
                            {.add = attribute::reverse});
+      // Reversed wallpaper glyphs show their pixel pattern in the selection
+      // color. Selected, they read as empty space like the cells around them.
+      for (std::int32_t x = left; x < right; ++x) {
+        const style appearance = buffer.at({x, y}).appearance();
+        if (has(appearance.attributes, attribute::backdrop))
+          buffer.fill({{x, y}, {1, 1}},
+                      cell::blank({.background = appearance.background,
+                                   .attributes = attribute::reverse}));
+      }
     }
   }
 
@@ -478,7 +494,10 @@ class application {
       std::string line;
       for (std::int32_t x = left; x < right; ++x) {
         const cell& value = rendered_.at({x, y});
-        if (!value.is_continuation()) line.append(value.text());
+        if (has(value.appearance().attributes, attribute::backdrop))
+          line.push_back(' ');
+        else if (!value.is_continuation())
+          line.append(value.text());
       }
       while (!line.empty() && line.back() == ' ') line.pop_back();
       result += line;
@@ -490,7 +509,7 @@ class application {
   void publish_copy(std::string text) {
     if (text.empty()) return;
     last_copied_ = std::move(text);
-    pending_output_ = osc52(last_copied_);
+    pending_output_ += osc52(last_copied_);
   }
 
   // simulate() has no frame loop, so the first copy draws the root into
