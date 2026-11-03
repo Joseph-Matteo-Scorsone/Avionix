@@ -867,6 +867,111 @@ class button final : public component {
   style_patch hover_{.add = attribute::underline};
 };
 
+class checkbox final : public component {
+ public:
+  checkbox() = default;
+  explicit checkbox(std::string label, bool checked = false)
+      : label_{std::move(label)}, checked_{checked} {}
+  explicit checkbox(bool checked, std::string label = {})
+      : label_{std::move(label)}, checked_{checked} {}
+
+  checkbox& set_label(std::string label) {
+    label_ = std::move(label);
+    return *this;
+  }
+  [[nodiscard]] const std::string& label() const noexcept { return label_; }
+
+  [[nodiscard]] bool checked() const noexcept { return checked_; }
+  [[nodiscard]] bool value() const noexcept { return checked_; }
+  checkbox& set_value(bool value) {
+    checked_ = value;
+    return *this;
+  }
+  [[nodiscard]] bool is_checked() const noexcept { return checked_; }
+  checkbox& toggle() {
+    checked_ = !checked_;
+    if (change_) change_(checked_);
+    return *this;
+  }
+  checkbox& on_toggle(std::function<void(bool)> callback) {
+    change_ = std::move(callback);
+    return *this;
+  }
+  checkbox& on_checked_change(std::function<void(bool)> callback) {
+    change_ = std::move(callback);
+    return *this;
+  }
+  checkbox& set_checked(bool value) {
+    checked_ = value;
+    return *this;
+  }
+
+  checkbox& on_change(std::function<void(bool)> callback) {
+    change_ = std::move(callback);
+    return *this;
+  }
+
+  checkbox& set_enabled(std::function<bool()> predicate) {
+    enabled_ = std::move(predicate);
+    return *this;
+  }
+  [[nodiscard]] bool enabled() const { return !enabled_ || enabled_(); }
+
+  checkbox& set_style(style_patch unchecked, style_patch checked_state,
+                      style_patch focused_style, style_patch disabled,
+                      style_patch hover) {
+    unchecked_style_ = unchecked;
+    checked_style_ = checked_state;
+    focus_style_ = focused_style;
+    disabled_style_ = disabled;
+    hover_style_ = hover;
+    return *this;
+  }
+
+  [[nodiscard]] bool focusable() const noexcept override { return true; }
+
+  void render(render_context& context) override {
+    const auto patch =
+        !enabled()  ? disabled_style_
+        : focused() ? focus_style_
+        : hovered() ? hover_style_
+        : checked_   ? checked_style_
+                    : unchecked_style_;
+    context.clear(patch);
+    std::string text = checked_ ? "[x]" : "[ ]";
+    if (!label_.empty()) text += " " + label_;
+    context.draw_text({0, 0}, text, patch);
+  }
+
+  event_result on_event(const event& value, event_context& context) override {
+    bool activate = false;
+    if (const auto* k = std::get_if<key_event>(&value))
+      activate = k->is(key::enter) || k->is(U' ');
+    if (const auto* m = std::get_if<mouse_event>(&value)) {
+      activate = m->action == mouse_action::press && m->button == mouse_button::left &&
+                 last_area().contains(m->where);
+      if (activate) context.request_focus(*this);
+    }
+    if (!activate) return event_result::ignored;
+    if (!enabled()) return event_result::handled;
+    const bool next = !checked_;
+    checked_ = next;
+    if (change_) change_(next);
+    return event_result::handled;
+  }
+
+ private:
+  std::string label_;
+  bool checked_{};
+  std::function<void(bool)> change_;
+  std::function<bool()> enabled_;
+  style_patch unchecked_style_{};
+  style_patch checked_style_{.add = attribute::bold};
+  style_patch focus_style_{.add = attribute::reverse};
+  style_patch disabled_style_{.foreground = colors::bright_black};
+  style_patch hover_style_{.add = attribute::underline};
+};
+
 class tabs final : public component {
  public:
   explicit tabs(std::vector<std::string> labels = {}) : labels_{std::move(labels)} {}
