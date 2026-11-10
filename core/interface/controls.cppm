@@ -312,6 +312,68 @@ class block final : public component {
   style_patch title_style_{.add = attribute::bold};
 };
 
+// Owns single-line key labels and descriptions. UI-thread use only.
+// The application controls visibility and key handling through a layer.
+struct shortcut_entry {
+  std::string key;
+  std::string description;
+};
+
+// A centered, opaque help panel. Content clips to the available area.
+// Updating entries rebuilds the text in linear time in the supplied text size.
+class shortcut_help final : public component {
+ public:
+  explicit shortcut_help(std::vector<shortcut_entry> entries = {}) {
+    set_entries(std::move(entries));
+  }
+
+  shortcut_help& set_entries(std::vector<shortcut_entry> entries) {
+    entries_ = std::move(entries);
+    std::size_t key_width = 0;
+    for (const auto& entry : entries_)
+      key_width = std::max(key_width, display_width(entry.key));
+    std::string content;
+    width_ = 24;
+    for (const auto& entry : entries_) {
+      if (!content.empty()) content += '\n';
+      content += entry.key;
+      content.append(key_width - display_width(entry.key) + 2, ' ');
+      content += entry.description;
+      width_ = std::max(width_, key_width + 2 + display_width(entry.description) + 4);
+    }
+    frame_.set_child(text{std::move(content)});
+    return *this;
+  }
+
+  [[nodiscard]] const std::vector<shortcut_entry>& entries() const noexcept {
+    return entries_;
+  }
+
+  void render(render_context& context) override {
+    const auto w = static_cast<std::uint32_t>(
+        std::min<std::size_t>(width_, context.width()));
+    const auto h = static_cast<std::uint32_t>(
+        std::min<std::size_t>(entries_.size() + 2, context.height()));
+    if (w == 0 || h == 0) {
+      frame_.clear_area();
+      return;
+    }
+    const rect area{{static_cast<std::int32_t>((context.width() - w) / 2),
+                     static_cast<std::int32_t>((context.height() - h) / 2)},
+                    {w, h}};
+    auto panel = context.child(area);
+    panel.fill(bounds(panel.extent()));
+    frame_.render_in(panel);
+  }
+
+  void children(std::vector<component*>& out) override { out.push_back(&frame_); }
+
+ private:
+  std::vector<shortcut_entry> entries_;
+  block frame_{"Keyboard shortcuts", border_kind::rounded};
+  std::size_t width_{24};
+};
+
 struct styled_span {
   std::string text;
   style_patch appearance{};

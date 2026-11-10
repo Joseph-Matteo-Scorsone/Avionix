@@ -400,7 +400,7 @@ const flag_options = struct {
 //
 // BMIs record the language and codegen options they were built with, so
 // every importer of an Avionix module must use the same -std, target,
-// optimization, and sanitizer flags. consumerObject() applies them.
+// POSIX thread, optimization, and sanitizer flags. consumerObject() applies them.
 fn cxxFlags(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
@@ -424,6 +424,7 @@ fn cxxFlags(
         if (options.werror) flags.append(b.allocator, "-Werror") catch @panic("OOM");
     }
     flags.append(b.allocator, "-fno-sized-deallocation") catch @panic("OOM");
+    if (target.result.os.tag != .windows) flags.append(b.allocator, "-pthread") catch @panic("OOM");
     if (!options.codegen) return flags.items;
 
     if (!target.query.isNative()) {

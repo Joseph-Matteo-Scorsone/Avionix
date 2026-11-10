@@ -87,6 +87,45 @@ const avionix_tests::suite text_widget{
          }},
     }};
 
+const avionix_tests::suite shortcut_help_widget{
+    "shortcut_help",
+    {
+        {"columns_and_owned_entries", [] {
+           shortcut_help help{{{"F1", "Help"}, {"Esc", "Close"}}};
+           auto b = application::render_to_buffer(help, {24, 4});
+           check(row_text(b, 1).find("F1   Help") != std::string::npos);
+           check(row_text(b, 2).find("Esc  Close") != std::string::npos);
+           check_equal(help.entries().size(), std::size_t{2});
+           help.set_entries({{"q", "Quit"}});
+           b = application::render_to_buffer(help, {24, 3});
+           check(row_text(b, 1).find("q  Quit") != std::string::npos);
+         }},
+        {"unicode_columns", [] {
+           shortcut_help help{{{"\xE4\xB8\xAD", "Wide"}, {"x", "Narrow"}}};
+           const auto b = application::render_to_buffer(help, {24, 4});
+           check(b.at({5, 1}).text() == "W");
+           check(b.at({5, 2}).text() == "N");
+         }},
+        {"small_and_empty_areas", [] {
+           shortcut_help help;
+           auto b = application::render_to_buffer(help, {24, 2});
+           check_equal(b.extent().width, std::uint32_t{24});
+           help.set_entries({{"Long key", "Long description"}});
+           b = application::render_to_buffer(help, {1, 1});
+           b = application::render_to_buffer(help, {0, 0});
+         }},
+        {"overlay_visibility", [] {
+           layer root;
+           root.add(text{"underlying"});
+           root.add(shortcut_help{{{"F1", "Help"}}});
+           auto b = application::render_to_buffer(root, {24, 3});
+           check(row_text(b, 1).find("F1  Help") != std::string::npos);
+           root.set_visible(1, false);
+           b = application::render_to_buffer(root, {24, 3});
+           check(row_text(b, 0).starts_with("underlying"));
+         }},
+    }};
+
 const avionix_tests::suite block_widget{
     "block",
     {
