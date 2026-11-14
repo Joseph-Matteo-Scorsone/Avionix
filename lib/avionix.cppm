@@ -5,7 +5,7 @@
 //   consumer ──import avionix──► this facade
 //                                   │
 //                                   ├─► interface: application, widget, layout,
-//                                   │   controls, markdown
+//                                   │   controls, markdown, camouflage
 //                                   ├─► entity: geometry, color, style, event,
 //                                   │   constraint, error, markdown
 //                                   └─► selected names from unicode and the
@@ -33,6 +33,7 @@ export import avionix.interface.widget;
 export import avionix.interface.layout;
 export import avionix.interface.controls;
 export import avionix.interface.equity_chart;
+export import avionix.interface.camouflage;
 export import avionix.interface.markdown;
 export import avionix.interface.image;
 export import avionix.interface.application;

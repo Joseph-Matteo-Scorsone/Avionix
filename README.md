@@ -3,6 +3,8 @@
 Markdown views automatically format delimited LaTeX math. See
 [terminal math support](docs/latex.md) and `zig build run-markdown`.
 
+`camouflage` hides a widget behind a refraction field that bends whatever is drawn beneath it. See [active camouflage](docs/camouflage.md) and `zig build run-camouflage`.
+
 For paste interception, native-drop limitations, and explicit clipboard images,
 see [attachment input](docs/attachment-input.md) and `examples/attachments.cpp`.
 
@@ -38,17 +40,18 @@ The terminal library has no other dependencies. The optional 3D viewport (`impor
 
 ## Build commands
 
-| Command                                  | What it does                                                                                           |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `zig build`                              | Builds `libavionix` and installs it with the module BMIs into `zig-out/`                               |
-| `zig build test`                         | Runs the unit tests (303 with the viewport, 251 without; no terminal needed)                           |
-| `zig build smoke`                        | Runs each example under a pseudo terminal, resizes it, sends its quit key, and checks for a clean exit |
-| `zig build bench -Doptimize=ReleaseFast` | Runs the hot-path benchmarks                                                                           |
-| `zig build examples`                     | Builds `hello`, `counter`, `dashboard`, `markdown`, `attachments`, and `viewport` into `zig-out/bin`   |
-| `zig build run-dashboard`                | Runs one example in the current terminal                                                               |
-| `zig build run-viewport`                 | Runs the CAD workspace example: 3D viewport inside the TUI (`-- --window` adds the companion window)   |
-| `zig build run-background`               | Runs the wallpaper with overlaid text and a draggable brightness slider                                |
-| `zig build viewport-check`               | Drives the viewport example's real window through a scripted check (needs a display and OpenGL 3.3)    |
+| Command                                  | What it does                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `zig build`                              | Builds `libavionix` and installs it with the module BMIs into `zig-out/`                                           |
+| `zig build test`                         | Runs the unit tests (303 with the viewport, 251 without; no terminal needed)                                       |
+| `zig build smoke`                        | Runs each example under a pseudo terminal, resizes it, sends its quit key, and checks for a clean exit             |
+| `zig build bench -Doptimize=ReleaseFast` | Runs the hot-path benchmarks                                                                                       |
+| `zig build examples`                     | Builds `hello`, `counter`, `dashboard`, `markdown`, `attachments`, `camouflage`, and `viewport` into `zig-out/bin` |
+| `zig build run-dashboard`                | Runs one example in the current terminal                                                                           |
+| `zig build run-viewport`                 | Runs the CAD workspace example: 3D viewport inside the TUI (`-- --window` adds the companion window)               |
+| `zig build run-background`               | Runs the wallpaper with overlaid text and a draggable brightness slider                                            |
+| `zig build run-camouflage`               | Runs a camouflaged panel over a grid and a word that hides on a timer; Space reveals the panel, g toggles the grid |
+| `zig build viewport-check`               | Drives the viewport example's real window through a scripted check (needs a display and OpenGL 3.3)                |
 
 Useful options: `-Dtarget=x86_64-linux-gnu` or `-Dtarget=aarch64-macos` to cross-compile, `-Doptimize=Debug|ReleaseSafe|ReleaseFast|ReleaseSmall`, and `-Dwerror=false` to keep warnings from failing the build. Arguments after `--` go to the program, for example `zig build test -- unicode` runs the tests whose name contains `unicode`.
 
@@ -225,7 +228,8 @@ The code is layered, and dependencies only point down:
 lib/avionix.cppm            public facade: `import avionix;`
         │
         ▼
-core/interface              application, widget, layout, controls, markdown
+core/interface              application, widget, layout, controls, markdown,
+                            camouflage
         │
         ├─► core/task       run, dispatch, render, resize
         │        │
@@ -234,7 +238,8 @@ core/interface              application, widget, layout, controls, markdown
         │        │                  terminal_capabilities
         │        │         │
         └────────┴─────────┴─► core/entity    geometry, color, style, unicode,
-                                              cell, event, constraint, error, markdown
+                                              cell, event, constraint, error, markdown,
+                                              camouflage
 ```
 
 - Entities are values and pure rules: no I/O, mostly `constexpr`.
@@ -272,7 +277,7 @@ The stable API is exactly what `import avionix;` exports:
 
 - Entities: `position`, `size`, `rect`, `color`, `colors::*`, `color_depth`, `style`, `style_patch`, `attribute`, the event types and `event`, `constraint`, `direction`, `error`, and `failure`.
 - Markdown: `parse_markdown`, `layout_markdown`, `markdown_document`, `markdown_block`, `markdown_span`, `markdown_line`, `markdown_mark`, and `markdown_role`.
-- Interfaces: `application`, `component`, the `widget` concept, `render_context`, `event_context`, `row`, `column`, `stack`, `padding`, `text`, `block`, `list_view`, `text_input`, `progress_bar`, `spacer`, `canvas`, `button`, `tabs`, `styled_text`, `scroll_view`, `text_area`, `markdown_view`, and `layer` with its `overlay` alias.
+- Interfaces: `application`, `component`, the `widget` concept, `render_context`, `event_context`, `row`, `column`, `stack`, `padding`, `text`, `block`, `list_view`, `text_input`, `progress_bar`, `spacer`, `canvas`, `button`, `tabs`, `styled_text`, `scroll_view`, `text_area`, `markdown_view`, `layer` with its `overlay` alias, and `camouflage` with `camouflage_options` (see [active camouflage](docs/camouflage.md)).
 - Selected helpers: `display_width`, `graphemes`, `grapheme_width`, `prefix_fitting_width`, `render_buffer`, and `cell`.
 
 Internal modules (`avionix.object.*`, `avionix.task.*`) can be imported, and the tests do, but they may change without notice.

@@ -26,6 +26,7 @@ set(avionix_modules
     core/entity/latex.cppm
     core/entity/image.cppm
     core/entity/terminal_graphics.cppm
+    core/entity/camouflage.cppm
     core/object/terminal_capabilities.cppm
     core/object/image_file.cppm
     core/object/clipboard.cppm
@@ -44,6 +45,7 @@ set(avionix_modules
     core/interface/layout.cppm
     core/interface/controls.cppm
     core/interface/equity_chart.cppm
+    core/interface/camouflage.cppm
     core/interface/markdown.cppm
     core/interface/image.cppm
     core/interface/application.cppm
@@ -191,6 +193,7 @@ if(BUILD_TESTING)
         tests/markdown_tests.cpp
         tests/terminal_tests.cpp
         tests/graphics_tests.cpp
+        tests/camouflage_tests.cpp
     )
     target_compile_features(avionix-tests PRIVATE cxx_std_26)
     target_sources(avionix-tests PRIVATE FILE_SET CXX_MODULES FILES tests/check.cppm)
@@ -209,7 +212,7 @@ if(BUILD_TESTING)
 endif()
 
 if(AVIONIX_BUILD_EXAMPLES)
-    foreach(example IN ITEMS hello counter dashboard markdown attachments background equity)
+    foreach(example IN ITEMS hello counter dashboard markdown attachments background equity camouflage)
         add_executable(avionix-${example} examples/${example}.cpp)
         target_compile_features(avionix-${example} PRIVATE cxx_std_26)
         target_link_libraries(avionix-${example} PRIVATE avionix)

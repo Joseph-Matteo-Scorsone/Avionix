@@ -41,6 +41,7 @@ import avionix.task.dispatch;
 import avionix.interface.widget;
 import avionix.interface.layout;
 import avionix.interface.controls;
+import avionix.interface.camouflage;
 
 // Allocation counting. Replacing the global allocation functions is
 // permitted in any one translation unit of a program.
@@ -74,6 +75,7 @@ inline void keep(T const& value) {
 struct counters {
   std::uint64_t cells_inspected{};
   std::uint64_t terminal_bytes{};
+  std::uint64_t cells_changed{};  // cells that differ from the previous frame
   std::uint64_t items{};  // domain-specific units (bytes decoded, events, ...)
 };
 
@@ -103,6 +105,7 @@ void bench(const options& opts, std::string_view name, std::string_view unit,
       const counters c = body();
       total.cells_inspected += c.cells_inspected;
       total.terminal_bytes += c.terminal_bytes;
+      total.cells_changed += c.cells_changed;
       total.items += c.items;
       ++iterations;
     }
@@ -117,6 +120,10 @@ void bench(const options& opts, std::string_view name, std::string_view unit,
   if (total.cells_inspected != 0) {
     extra += std::format("  cells/op {:>9.0f}",
                          static_cast<double>(total.cells_inspected) * per);
+  }
+  if (total.cells_changed != 0) {
+    extra += std::format("  changed/op {:>7.1f}",
+                         static_cast<double>(total.cells_changed) * per);
   }
   if (total.terminal_bytes != 0) {
     extra += std::format("  term-bytes/op {:>8.0f}",
@@ -290,6 +297,67 @@ int main(int argc, char** argv) {
       const auto bytes = r.present();
       return counters{.cells_inspected = r.last_frame().cells_inspected,
                       .terminal_bytes = bytes.size()};
+    });
+  }
+
+  // Active camouflage: an 80x24 block over a grid, through the real
+  // renderer, so each row reports the full frame (background, effect,
+  // diff, encoding) and the cells and bytes it changed on screen.
+  {
+    constexpr size small{80, 24};
+    renderer r{color_depth::truecolor, true};
+    r.resize(small);
+    canvas grid{[](render_context& context) {
+      const style_patch line{.foreground = color::rgb(0x4a, 0x5a, 0x6e)};
+      for (std::int32_t y = 0; y < static_cast<std::int32_t>(context.height()); ++y)
+        for (std::int32_t x = 0; x < static_cast<std::int32_t>(context.width()); ++x)
+          context.draw_text({x, y},
+                            x % 6 == 0 ? (y % 3 == 0 ? "+" : "|")
+                                       : (y % 3 == 0 ? "-" : (x * 7 + y) % 5 == 0 ? "." : " "),
+                            line);
+    }};
+    camouflage wrapped{block{"Cloaked", border_kind::rounded, canvas{[](render_context& c) {
+      c.clear({.background = color::rgb(0x1a, 0x24, 0x30)});
+      c.draw_text({1, 1}, "Status: all systems nominal");
+    }}}};
+    frame_state frame;
+    const auto present_frame = [&] {
+      r.begin_frame();
+      render_context context{r.back(), r.back().area(), frame};
+      grid.render_in(context);
+      wrapped.render_in(context);
+      const auto bytes = r.present();
+      return counters{.cells_inspected = r.last_frame().cells_inspected,
+                      .terminal_bytes = bytes.size(),
+                      .cells_changed = r.last_frame().cells_changed};
+    };
+    const auto step = std::chrono::milliseconds{50};
+    bench(opts, "camouflage.rest_camouflaged_80x24", "", [&] {
+      wrapped.advance(step);
+      return present_frame();
+    });
+    bench(opts, "camouflage.reveal_transition_80x24", "", [&] {
+      // Turn around at each end so every frame is mid-dissolve.
+      if (wrapped.reveal() == wrapped.reveal_target())
+        wrapped.set_reveal(wrapped.reveal_target() < 0.5 ? 1.0 : 0.0);
+      wrapped.advance(step);
+      return present_frame();
+    });
+    wrapped.set_reveal(1.0);
+    wrapped.advance(std::chrono::seconds{2});
+    bench(opts, "camouflage.rest_solid_80x24", "", [&] {
+      wrapped.advance(step);
+      return present_frame();
+    });
+    // The effect alone, without the renderer: field, mask, and composite.
+    wrapped.set_reveal(0.0);
+    wrapped.advance(std::chrono::seconds{2});
+    render_buffer back{small};
+    bench(opts, "camouflage.composite_only_80x24", "", [&] {
+      wrapped.advance(step);
+      render_context context{back, back.area(), frame};
+      wrapped.render_in(context);
+      return counters{};
     });
   }
 

@@ -50,6 +50,7 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.entity.clipboard", .path = "core/entity/clipboard.cppm" },
     .{ .name = "avionix.entity.image", .path = "core/entity/image.cppm" },
     .{ .name = "avionix.entity.terminal_graphics", .path = "core/entity/terminal_graphics.cppm", .imports = &.{ "avionix.entity.image", "avionix.entity.color" } },
+    .{ .name = "avionix.entity.camouflage", .path = "core/entity/camouflage.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color" } },
 
     // object
     .{ .name = "avionix.object.image_file", .path = "core/object/image_file.cppm", .imports = &.{ "avionix.entity.image", "avionix.entity.error" }, .stb_headers = true },
@@ -74,6 +75,7 @@ const library_modules = [_]module_spec{
     .{ .name = "avionix.interface.layout", .path = "core/interface/layout.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.event", "avionix.entity.constraint", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.controls", .path = "core/interface/controls.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.unicode", "avionix.entity.event", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.equity_chart", .path = "core/interface/equity_chart.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.interface.widget" } },
+    .{ .name = "avionix.interface.camouflage", .path = "core/interface/camouflage.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.cell", "avionix.entity.event", "avionix.entity.camouflage", "avionix.object.buffer", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.image", .path = "core/interface/image.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.terminal_graphics", "avionix.interface.widget" } },
     .{ .name = "avionix.interface.markdown", .path = "core/interface/markdown.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.markdown", "avionix.interface.widget", "avionix.interface.controls" } },
     .{ .name = "avionix.interface.application", .path = "core/interface/application.cppm", .imports = &.{ "avionix.entity.geometry", "avionix.entity.color", "avionix.entity.style", "avionix.entity.cell", "avionix.entity.event", "avionix.entity.error", "avionix.object.buffer", "avionix.object.event_queue", "avionix.object.renderer", "avionix.task.run", "avionix.interface.widget" } },
@@ -99,6 +101,7 @@ const library_modules = [_]module_spec{
         "avionix.interface.layout",
         "avionix.interface.controls",
         "avionix.interface.equity_chart",
+        "avionix.interface.camouflage",
         "avionix.interface.markdown",
         "avionix.interface.image",
         "avionix.interface.application",
@@ -210,6 +213,7 @@ const test_program: program_spec = .{
         "tests/markdown_tests.cpp",
         "tests/terminal_tests.cpp",
         "tests/graphics_tests.cpp",
+        "tests/camouflage_tests.cpp",
     },
     .imports = &(all_internal ++ [_][]const u8{"avionix_tests.check"}),
     .description = "Run the Avionix test suite",
@@ -240,6 +244,7 @@ const example_programs = [_]program_spec{
     .{ .name = "background", .sources = &.{"examples/background.cpp"}, .imports = &.{"avionix"}, .description = "Run the wallpaper example (drag the brightness slider)" },
     .{ .name = "attachments", .sources = &.{"examples/attachments.cpp"}, .imports = &.{"avionix"}, .description = "Run the attachment input example" },
     .{ .name = "equity", .sources = &.{"examples/equity.cpp"}, .imports = &.{"avionix"}, .description = "Run the monochrome equity chart example" },
+    .{ .name = "camouflage", .sources = &.{"examples/camouflage.cpp"}, .imports = &.{"avionix"}, .description = "Run the active camouflage example (Space reveals)" },
 };
 
 const both_example: program_spec = .{
@@ -635,6 +640,7 @@ pub fn build(b: *std.Build) void {
         .{ .index = 1, .expect = "count: 0", .keys = "++q" },
         .{ .index = 2, .expect = "Avionix dashboard", .keys = "\x03" },
         .{ .index = 3, .expect = "Notes", .keys = "q" },
+        .{ .index = 7, .expect = "Space reveals", .keys = " q" },
     };
     for (smoke_cases) |case| {
         const run = b.addRunArtifact(smoke);
