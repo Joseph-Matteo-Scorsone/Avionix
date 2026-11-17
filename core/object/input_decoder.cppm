@@ -51,6 +51,11 @@ struct decoded_input {
   std::size_t consumed{};
   std::optional<event> value{};  // empty for recognized-but-ignored sequences
   bool paste_begin{};            // ESC[200~
+  std::uint32_t repeat{1};
+  bool utf16{};
+  bool raw_character{};
+  char32_t code_unit{};
+  bool key_down{};
 };
 
 namespace detail {
@@ -267,6 +272,47 @@ constexpr std::optional<event> decode_csi(char final_byte,
                      p.values, p.count};
     return event{r};
   }
+  if (final_byte == '_' && p.count >= 4) {
+    if (p.get(3, 0) != 1) return std::nullopt;
+    const auto vk = p.get(0, 0), unit = p.get(2, 0), state = p.get(4, 0);
+    modifiers mods = modifiers::none;
+    if (state & 16) mods |= modifiers::shift;
+    if (state & 3) mods |= modifiers::alt;
+    if (state & 12) mods |= modifiers::ctrl;
+    // AltGr produces text, not a Ctrl+Alt shortcut.
+    if ((state & 1) && (state & 8) && unit >= 32) mods = modifiers::none;
+    switch (vk) {
+      case 8: return event{make_key(key::backspace, mods)};
+      case 9: return event{make_key(key::tab, mods)};
+      case 13: return event{make_key(key::enter, mods)};
+      case 27: return event{make_key(key::escape, mods)};
+      case 33: return event{make_key(key::page_up, mods)};
+      case 34: return event{make_key(key::page_down, mods)};
+      case 35: return event{make_key(key::end, mods)};
+      case 36: return event{make_key(key::home, mods)};
+      case 37: return event{make_key(key::left, mods)};
+      case 38: return event{make_key(key::up, mods)};
+      case 39: return event{make_key(key::right, mods)};
+      case 40: return event{make_key(key::down, mods)};
+      case 45: return event{make_key(key::insert, mods)};
+      case 46: return event{make_key(key::del, mods)};
+    }
+    if (vk >= 112 && vk <= 123)
+      return event{make_key(static_cast<key>(static_cast<unsigned>(key::f1) + vk - 112), mods)};
+    if (unit > 65535) return std::nullopt;
+    if (has(mods, modifiers::ctrl) && vk >= 65 && vk <= 90)
+      return event{make_char(U'a' + vk - 65, mods)};
+    if (unit == 0) {
+      if (vk == 32) return event{make_char(U' ', mods)};
+      return std::nullopt;
+    }
+    if (unit < 32) {
+      auto value = control_key(static_cast<std::uint8_t>(unit));
+      value.mods |= mods;
+      return event{value};
+    }
+    return event{make_char(static_cast<char32_t>(unit), mods)};
+  }
   switch (final_byte) {
     case '~': {
       const auto k = tilde_key(p.get(0, 0));
@@ -357,7 +403,10 @@ constexpr std::optional<event> decode_csi(char final_byte,
       if (final_byte == '~' && params.prefix == 0 && params.get(0, 0) == 200) {
         return decoded_input{consumed, std::nullopt, true};
       }
-      return decoded_input{consumed, decode_csi(final_byte, params), false};
+      return decoded_input{consumed, decode_csi(final_byte, params), false,
+          final_byte == '_' ? std::clamp(params.get(5, 1), 1u, 65535u) : 1u,
+          final_byte == '_', params.get(0, 0) == 0 && params.get(1, 0) == 0,
+          static_cast<char32_t>(params.get(2, 0)), params.get(3, 0) == 1};
     }
     if (introducer == 'O') {
       if (bytes.size() < 3) {
@@ -416,14 +465,55 @@ class input_decoder {
  public:
   static constexpr std::size_t default_max_paste_bytes = 8 * 1024 * 1024;
 
-  explicit input_decoder(std::size_t max_paste_bytes = default_max_paste_bytes)
-      : max_paste_bytes_{max_paste_bytes} {
+  explicit input_decoder(std::size_t max_paste_bytes = default_max_paste_bytes,
+                         bool win32_input = false)
+      : win32_input_{win32_input}, max_paste_bytes_{max_paste_bytes} {
     pending_.reserve(256);
   }
 
   // Decodes as much of `bytes` as possible, appending events to `out`.
   // Incomplete trailing sequences are kept for the next call.
   void feed(std::string_view bytes, std::vector<event>& out) {
+    wire_pending_.append(bytes);
+    std::size_t offset = 0;
+    while (offset < wire_pending_.size()) {
+      const auto rest = std::string_view{wire_pending_}.substr(offset);
+      if (in_paste_ && !wrapped_paste_ && !win32_input_) {
+        feed_text(rest.substr(0, 1), out);
+        ++offset;
+        continue;
+      }
+      const bool was_paste = in_paste_;
+      const auto packet = decode_one(rest);
+      if (!packet && packet.error().kind == decode_failure::incomplete) break;
+      const auto consumed = packet ? packet->consumed : packet.error().consumed;
+      // ConPTY wraps VT paste delimiters as zero-key Win32 records. Once
+      // inside a paste, keyboard records carry literal UTF-16 text too.
+      if (packet && packet->utf16 && (packet->raw_character || in_paste_)) {
+        if (packet->key_down && packet->code_unit && packet->code_unit <= 65535) {
+          auto cp = packet->code_unit;
+          if (cp >= 0xD800 && cp <= 0xDBFF) wire_high_surrogate_ = cp;
+          else {
+            if (cp >= 0xDC00 && cp <= 0xDFFF)
+              cp = wire_high_surrogate_ ? 0x10000 + ((wire_high_surrogate_ - 0xD800) << 10) + cp - 0xDC00 : 0xFFFD;
+            else if (wire_high_surrogate_) feed_text("\xef\xbf\xbd", out);
+            wire_high_surrogate_ = 0;
+            std::array<char, 4> encoded{};
+            const auto length = encode_utf8(cp, encoded);
+            for (std::uint32_t n = 0; n < packet->repeat; ++n)
+              feed_text({encoded.data(), length}, out);
+          }
+        }
+      } else feed_text(rest.substr(0, consumed), out);
+      if (!was_paste && in_paste_ && packet && packet->utf16) wrapped_paste_ = true;
+      if (!in_paste_) wrapped_paste_ = false;
+      offset += consumed;
+    }
+    wire_pending_.erase(0, offset);
+  }
+
+ private:
+  void feed_text(std::string_view bytes, std::vector<event>& out) {
     pending_.append(bytes);
     std::size_t offset = 0;
     while (offset < pending_.size()) {
@@ -432,7 +522,7 @@ class input_decoder {
         if (in_paste_) break;
         continue;
       }
-      const auto step = decode_one(std::string_view{pending_}.substr(offset));
+      auto step = decode_one(std::string_view{pending_}.substr(offset));
       if (!step) {
         if (step.error().kind == decode_failure::incomplete) break;
         ++malformed_;
@@ -445,18 +535,31 @@ class input_decoder {
         paste_.clear();
         paste_discarded_ = false;
       } else if (step->value) {
-        out.push_back(std::move(*step->value));
+        if (auto* k = std::get_if<key_event>(&*step->value); k && step->utf16 && k->code == key::character) {
+          const auto unit = k->character;
+          if (unit >= 0xD800 && unit <= 0xDBFF) { high_surrogate_ = unit; continue; }
+          if (unit >= 0xDC00 && unit <= 0xDFFF)
+            k->character = high_surrogate_ ? 0x10000 + ((high_surrogate_ - 0xD800) << 10) + unit - 0xDC00 : 0xFFFD;
+          else if (high_surrogate_) out.push_back(event{detail::make_char(0xFFFD)});
+          high_surrogate_ = 0;
+        }
+        for (std::uint32_t n = 0; n < step->repeat; ++n) out.push_back(*step->value);
       }
     }
     pending_.erase(0, offset);
   }
 
+ public:
   // Resolves pending bytes after the input went quiet: a lone ESC becomes
   // the Escape key and truncated sequences are dropped. An unterminated
   // paste stays pending.
   void flush(std::vector<event>& out) {
     if (in_paste_) {
       return;
+    }
+    if (!wire_pending_.empty()) {
+      feed_text(wire_pending_, out);
+      wire_pending_.clear();
     }
     while (!pending_.empty()) {
       if (pending_[0] == '\x1b' && pending_.size() == 1) {
@@ -477,7 +580,7 @@ class input_decoder {
   }
 
   [[nodiscard]] bool has_pending() const noexcept {
-    return !pending_.empty() && !in_paste_;
+    return (!pending_.empty() || !wire_pending_.empty()) && !in_paste_;
   }
   [[nodiscard]] bool in_paste() const noexcept { return in_paste_; }
   [[nodiscard]] std::uint64_t malformed_count() const noexcept { return malformed_; }
@@ -516,6 +619,11 @@ class input_decoder {
   }
 
   std::string pending_{};
+  bool win32_input_{};
+  bool wrapped_paste_{};
+  std::string wire_pending_{};
+  char32_t wire_high_surrogate_{};
+  char32_t high_surrogate_{};
   std::string paste_{};
   std::size_t max_paste_bytes_;
   bool in_paste_{};

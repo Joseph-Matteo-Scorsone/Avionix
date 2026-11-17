@@ -53,7 +53,13 @@ class input_reader {
       : session_{session},
         queue_{queue},
         options_{options},
-        decoder_{options.max_paste_bytes},
+        decoder_{options.max_paste_bytes,
+#ifdef _WIN32
+                 true
+#else
+                 false
+#endif
+        },
         last_size_{initial_size},
         thread_{[this](std::stop_token stop) { run(std::move(stop)); }} {}
 

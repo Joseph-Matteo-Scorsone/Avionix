@@ -68,6 +68,9 @@ struct terminal_options {
 // VT sequence that puts the terminal into the requested state.
 [[nodiscard]] std::string enter_sequence(const terminal_options& options) {
   std::string out;
+#ifdef _WIN32
+  out += "\x1b[?9001h";
+#endif
   if (options.alternate_screen) out += "\x1b[?1049h";
   if (options.hide_cursor) out += "\x1b[?25l";
   if (options.bracketed_paste) out += "\x1b[?2004h";
@@ -94,6 +97,9 @@ struct terminal_options {
   out += "\x1b[0m";
   if (options.hide_cursor) out += "\x1b[?25h";
   if (options.alternate_screen) out += "\x1b[?1049l";
+#ifdef _WIN32
+  out += "\x1b[?9001l";
+#endif
   return out;
 }
 
@@ -463,12 +469,13 @@ std::expected<terminal_session, error> terminal_session::open(
   }
   // ENABLE_EXTENDED_FLAGS without ENABLE_QUICK_EDIT_MODE turns off console
   // text selection so mouse input reaches the application.
+  // VT input preserves paste markers; mode 9001 retains keyboard modifiers.
   DWORD input_mode = ENABLE_VIRTUAL_TERMINAL_INPUT | ENABLE_WINDOW_INPUT;
   if (options.mouse) {
-    input_mode |= ENABLE_EXTENDED_FLAGS;
+    input_mode |= ENABLE_EXTENDED_FLAGS | ENABLE_MOUSE_INPUT;
   }
   if (SetConsoleMode(st.input, input_mode) == 0) {
-    auto e = platform_error(operation, "SetConsoleMode: ENABLE_VIRTUAL_TERMINAL_INPUT");
+    auto e = platform_error(operation, "SetConsoleMode: native console input");
     e.kind = failure::unsupported_capability;
     return std::unexpected(std::move(e));
   }
@@ -593,8 +600,15 @@ std::expected<read_result, error> terminal_session::read(
       continue;
     }
     if (record.EventType == MOUSE_EVENT && st.options.mouse) {
+      const auto& mouse = record.Event.MouseEvent;
+      if (!st.options.mouse_motion && mouse.dwEventFlags == MOUSE_MOVED &&
+          mouse.dwButtonState == 0) continue;
       (void)append_mouse(out, limit, record.Event.MouseEvent, st.mouse_buttons,
                          window_origin);
+      continue;
+    }
+    if (record.EventType == FOCUS_EVENT && st.options.focus_events) {
+      (void)append_bytes(out, limit, record.Event.FocusEvent.bSetFocus ? "\x1b[I" : "\x1b[O");
       continue;
     }
     if (record.EventType != KEY_EVENT) {
@@ -607,6 +621,10 @@ std::expected<read_result, error> terminal_session::read(
     }
     const WORD repeat = std::max<WORD>(key.wRepeatCount, 1);
     for (WORD r = 0; r < repeat && limit - out >= 32; ++r) {
+      if (key.wVirtualKeyCode == VK_RETURN && vt_modifier(key.dwControlKeyState) != 1) {
+        (void)append_csi_key(out, limit, "13", 'u', key.dwControlKeyState);
+        continue;
+      }
       if (unit == 0) {
         (void)append_special_key(out, limit, key);
         continue;

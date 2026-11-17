@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 import avionix;
+import avionix.object.input_decoder;
 import avionix_tests.check;
 using namespace avionix;
 using avionix_tests::check;
@@ -229,6 +230,40 @@ const avionix_tests::suite features{
         b = application::render_to_buffer(root, {10, 1});
         app.simulate(root, click({0, 0}));
         check(bottom == 1);
+      }},
+     {"mixed_windows_paste_keeps_blank_lines", [] {
+        text_area value;
+        application app;
+        unsigned sends = 0;
+        value.on_submit([&](const auto&) { ++sends; });
+        input_decoder decoder{input_decoder::default_max_paste_bytes, true};
+        std::vector<event> events;
+        decoder.feed("\x1b[200~Aurora\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_"
+                     "\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_Rifts\x1b[201~", events);
+        for (const auto& item : events) app.simulate(value, item);
+        check(sends == 0 && value.value() == "Aurora\n\nRifts");
+        app.simulate(value, key_press(key::enter));
+        check(sends == 1);
+      }},
+     {"multiline_paste_waits_for_enter", [] {
+        text_area value;
+        application app;
+        unsigned sends = 0;
+        value.on_submit([&](const auto&) { ++sends; });
+        input_decoder decoder;
+        std::vector<event> events;
+        decoder.feed("\x1b[200~Aurora\r\n\r\nRifts\nCosmos\x1b[201~", events);
+        for (const auto& item : events) app.simulate(value, item);
+        check(sends == 0);
+        check(value.value() == "Aurora\n\nRifts\nCosmos");
+        events.clear();
+        decoder.feed("\x1b[13;28;13;1;16;1_", events);
+        for (const auto& item : events) app.simulate(value, item);
+        check(sends == 0 && value.value().ends_with("\n"));
+        events.clear();
+        decoder.feed("\x1b[13;28;13;1;0;1_", events);
+        for (const auto& item : events) app.simulate(value, item);
+        check(sends == 1);
       }},
      {"text_area_newlines_submit_history",
       [] {

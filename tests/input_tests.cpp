@@ -167,6 +167,55 @@ const avionix_tests::suite mouse{
 const avionix_tests::suite other{
     "input_other",
     {
+        {"win32_mixed_paste_newlines", [] {
+           const std::string enter = "\x1b[13;28;13;1;0;1_\x1b[13;28;13;0;0;1_";
+           const std::string wire = "\x1b[200~Aurora" + enter + enter + "Rifts" + enter +
+               "Cosmos" + enter + "\x1b[201~\x1b[13;28;13;1;16;1_\x1b[13;28;13;1;0;1_";
+           for (std::size_t chunk = 1; chunk <= wire.size(); ++chunk) {
+             input_decoder decoder{input_decoder::default_max_paste_bytes, true};
+             std::vector<event> events;
+             for (std::size_t offset = 0; offset < wire.size(); offset += chunk)
+               decoder.feed(std::string_view{wire}.substr(offset, chunk), events);
+             check(events.size() == 3);
+             check(std::get<paste_event>(events.at(0)).text == "Aurora\r\rRifts\rCosmos\r");
+             check(std::get<key_event>(events.at(1)).is(key::enter, modifiers::shift));
+             check(std::get<key_event>(events.at(2)).is(key::enter));
+           }
+         }},
+        {"conpty_wrapped_paste", [] {
+           const auto packet = [](unsigned vk, unsigned unit) {
+             return "\x1b[" + std::to_string(vk) + ";0;" + std::to_string(unit) + ";1;0;1_";
+           };
+           std::string wire;
+           for (char c : std::string{"\x1b[200~"}) wire += packet(0, static_cast<unsigned char>(c));
+           for (char c : std::string{"Aurora\n\nRifts\nCosmos"}) wire += packet(c == '\n' ? 13 : 65, static_cast<unsigned char>(c));
+           for (char c : std::string{"\x1b[201~"}) wire += packet(0, static_cast<unsigned char>(c));
+           wire += "\x1b[13;28;13;1;16;1_\x1b[13;28;13;1;0;1_";
+           input_decoder decoder;
+           std::vector<event> events;
+           for (char c : wire) decoder.feed({&c, 1}, events);
+           check(events.size() == 3);
+           check(std::get<paste_event>(events.at(0)).text == "Aurora\n\nRifts\nCosmos");
+           check(std::get<key_event>(events.at(1)).is(key::enter, modifiers::shift));
+           check(std::get<key_event>(events.at(2)).is(key::enter));
+         }},
+        {"win32_keys_and_multiline_paste", [] {
+           check(only_key("\x1b[13;28;13;1;16;1_").is(key::enter, modifiers::shift));
+           check(only_key("\x1b[67;46;3;1;8;1_").is(U'c', modifiers::ctrl));
+           check(only_key("\x1b[38;72;0;1;16;1_").is(key::up, modifiers::shift));
+           check(decode_all("\x1b[13;28;13;0;0;1_").empty());
+           auto repeated = decode_all("\x1b[65;30;97;1;0;3_");
+           check(repeated.size() == 3);
+           check(only_key("\x1b[0;0;55357;1;0;1_\x1b[0;0;56832;1;0;1_").character == 0x1F600);
+           const std::string text = "Aurora\r\n\r\nRifts\nCosmos\x1b[13;28;13;1;0;1_";
+           const std::string wire = "\x1b[200~" + text + "\x1b[201~\x1b[13;28;13;1;0;1_";
+           input_decoder decoder;
+           std::vector<event> events;
+           for (char c : wire) decoder.feed(std::string_view{&c, 1}, events);
+           check(events.size() == 2);
+           check(std::get<paste_event>(events.at(0)).text == text);
+           check(std::get<key_event>(events.at(1)).is(key::enter));
+         }},
         {"bracketed_paste",
          [] {
            const auto events = decode_all("\x1b[200~hello\x1b[Aworld\x1b[201~x");

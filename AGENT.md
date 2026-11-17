@@ -1289,3 +1289,10 @@ The consuming application sees Avionix rather than its machinery.
 ## Outlined buttons
 
 `button::set_outlined(bool)` opts into a border without changing event delivery. At three or more rows it draws a box around the label; compact controls use bracketed labels. Callers allocate height and width. Widget tests check both renderings, keyboard activation and disabled controls with virtual buffers.
+
+
+Windows terminal input keeps VT input enabled so ConPTY preserves bracketed paste. Private mode 9001 carries key modifiers through the shared decoder, including Shift+Enter, key releases, repeat counts and UTF-16 pairs. Startup and restoration pair the mode changes. `AVIONIX_NATIVE_INPUT_TEST=1` enables a console-backed test that injects Shift+Enter and Enter and checks their distinct events. Decoder and composer tests verify that a multiline paste stays one edit and submits only on a later Enter.
+
+On Windows, `python tests/conpty_paste.py zig-out/bin/avionix-tests.exe` runs the paste and modified-Enter test through a hidden ConPTY connection. Run `zig build install-tests` first.
+
+The Windows input reader explicitly enables Win32 transport decoding inside paste envelopes, including plain delimiters mixed with encoded Enter down/up records. Other readers preserve literal escape sequences in plain pastes. Tests cover every input chunk size for mixed envelopes, CRLF through ConPTY, blank lines and separate submission.
