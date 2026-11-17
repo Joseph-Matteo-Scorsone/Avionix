@@ -871,6 +871,10 @@ class button final : public component {
     armed_ = false;
     return *this;
   }
+  button& set_outlined(bool value = true) {
+    outlined_ = value;
+    return *this;
+  }
   button& set_style(style_patch normal, style_patch focused_style, style_patch disabled,
                     style_patch hover) {
     normal_ = normal;
@@ -891,6 +895,33 @@ class button final : public component {
                        : hovered() ? hover_
                                    : normal_;
     context.clear(patch);
+    if (outlined_ && context.width() >= 4) {
+      const auto width = static_cast<std::int32_t>(context.width());
+      const auto height = static_cast<std::int32_t>(context.height());
+      const auto label = armed_ ? "Confirm: " + label_ : label_;
+      if (height >= 3) {
+        for (std::int32_t x = 1; x < width - 1; ++x) {
+          context.draw_text({x, 0}, "─", patch);
+          context.draw_text({x, height - 1}, "─", patch);
+        }
+        context.draw_text({0, 0}, "┌", patch);
+        context.draw_text({width - 1, 0}, "┐", patch);
+        context.draw_text({0, height - 1}, "└", patch);
+        context.draw_text({width - 1, height - 1}, "┘", patch);
+        for (std::int32_t y = 1; y < height - 1; ++y) {
+          context.draw_text({0, y}, "│", patch);
+          context.draw_text({width - 1, y}, "│", patch);
+        }
+        auto inner = context.child({{2, 1}, {static_cast<std::uint32_t>(width - 4), static_cast<std::uint32_t>(height - 2)}});
+        inner.draw_text({0, 0}, label, patch);
+      } else {
+        context.draw_text({0, 0}, "[", patch);
+        auto inner = context.child({{1, 0}, {static_cast<std::uint32_t>(width - 2), 1}});
+        inner.draw_text({0, 0}, label, patch);
+        context.draw_text({width - 1, 0}, "]", patch);
+      }
+      return;
+    }
     context.draw_text({0, 0}, armed_ ? "Confirm: " + label_ : label_, patch);
   }
   event_result on_event(const event& value, event_context& context) override {
@@ -923,6 +954,7 @@ class button final : public component {
   std::function<bool()> enabled_;
   bool confirm_{};
   bool armed_{};
+  bool outlined_{};
   style_patch normal_{};
   style_patch focus_{.add = attribute::reverse};
   style_patch disabled_{.foreground = colors::bright_black};

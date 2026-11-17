@@ -301,6 +301,34 @@ const avionix_tests::suite progress_widget{
          }},
     }};
 
+const avionix_tests::suite outlined_buttons{
+    "outlined_button",
+    {
+        {"borders_and_compact_layout", [] {
+           button run{"Run"};
+           run.set_outlined();
+           const auto boxed = application::render_to_buffer(run, {14, 3});
+           check(boxed.at({0, 0}).text() == "┌");
+           check(boxed.at({13, 2}).text() == "┘");
+           check(row_text(boxed, 1).find("Run") != std::string::npos);
+           const auto compact = application::render_to_buffer(run, {14, 1});
+           check(row_text(compact, 0).starts_with("[Run"));
+           check(row_text(compact, 0).ends_with("]"));
+         }},
+        {"keyboard_and_disabled_state", [] {
+           button run{"Run"};
+           run.set_outlined();
+           unsigned presses = 0;
+           run.on_press([&] { ++presses; });
+           application app;
+           app.simulate(run, key(key::enter));
+           check(presses == 1);
+           run.set_enabled([] { return false; });
+           app.simulate(run, key(key::enter));
+           check(presses == 1);
+         }},
+    }};
+
 const avionix_tests::suite routing{
     "application",
     {

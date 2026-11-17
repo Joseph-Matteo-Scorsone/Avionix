@@ -1284,3 +1284,8 @@ The terminal hot path stays fast.
 The implementation stays replaceable.
 
 The consuming application sees Avionix rather than its machinery.
+
+
+## Outlined buttons
+
+`button::set_outlined(bool)` opts into a border without changing event delivery. At three or more rows it draws a box around the label; compact controls use bracketed labels. Callers allocate height and width. Widget tests check both renderings, keyboard activation and disabled controls with virtual buffers.
